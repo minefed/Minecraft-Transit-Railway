@@ -107,6 +107,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 						entity.getSelectedIds(),
 						facing,
 						backgroundColor | ARGB_BLACK,
+						false,
 						(textureId, x, y, size, flipTexture) -> MainRenderer.scheduleRender(textureId, true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
 							storedMatrixTransformations.transform(graphicsHolderNew, offset);
 							IDrawing.drawTexture(graphicsHolderNew, x, y, size, size, flipTexture ? 1 : 0, 0, flipTexture ? 0 : 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
@@ -119,7 +120,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		graphicsHolder.pop();
 	}
 
-	public static void drawSign(GraphicsHolder graphicsHolder, @Nullable StoredMatrixTransformations storedMatrixTransformations, BlockPos pos, String signId, float x, float y, float size, float maxWidthLeft, float maxWidthRight, LongAVLTreeSet selectedIds, Direction facing, int backgroundColor, DrawTexture drawTexture) {
+	public static void drawSign(GraphicsHolder graphicsHolder, @Nullable StoredMatrixTransformations storedMatrixTransformations, BlockPos pos, String signId, float x, float y, float size, float maxWidthLeft, float maxWidthRight, LongAVLTreeSet selectedIds, Direction facing, int backgroundColor, boolean isGui, DrawTexture drawTexture) {
 		final SignResource sign = getSign(signId);
 		if (sign == null) {
 			return;
@@ -258,7 +259,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				storedMatrixTransformationsNew.add(graphicsHolderNew -> graphicsHolderNew.translate(x, y, 0));
 				QrCodeHelper.INSTANCE.renderQrCode(storedMatrixTransformationsNew, QueuedRenderLayer.LIGHT, signSize);
 			} else {
-				if (fullSizeSign) {
+				if (fullSizeSign && isGui == false) {
 					final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
 
 					MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
