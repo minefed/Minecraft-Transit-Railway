@@ -25,6 +25,9 @@
 		},
 		"backgroundColor": {
 			"type": "string"
+		},
+		"fullSizeSign": {
+			"type": "boolean"
 		}
 	},
 	"required": [
@@ -34,6 +37,7 @@
 		"customText",
 		"flipCustomText",
 		"small",
-		"backgroundColor"
+		"backgroundColor",
+		"fullSizeSign"
 	]
 }
