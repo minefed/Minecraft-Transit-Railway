@@ -177,7 +177,7 @@ public class RailwaySignScreen extends ScreenExtension implements IGui {
 
 		for (int i = 0; i < signIds.length; i++) {
 			if (signIds[i] != null) {
-				RenderRailwaySign.drawSign(graphicsHolder, null, signPos, signIds[i], (width - SIGN_SIZE * length) / 2F + i * SIGN_SIZE, 0, SIGN_SIZE, RenderRailwaySign.getMaxWidth(signIds, i, false), RenderRailwaySign.getMaxWidth(signIds, i, true), selectedIds, Direction.UP, 0, (textureId, x, y, size, flipTexture) -> {
+				RenderRailwaySign.drawSign(graphicsHolder, null, signPos, signIds[i], (width - SIGN_SIZE * length) / 2F + i * SIGN_SIZE, 0, SIGN_SIZE, RenderRailwaySign.getMaxWidth(signIds, i, false), RenderRailwaySign.getMaxWidth(signIds, i, true), selectedIds, Direction.UP, 0, true, (textureId, x, y, size, flipTexture) -> {
 					final GuiDrawing guiDrawing = new GuiDrawing(graphicsHolder);
 					guiDrawing.beginDrawingTexture(textureId);
 					guiDrawing.drawTexture(x, y, x + size, y + size, flipTexture ? 1 : 0, 0, flipTexture ? 0 : 1, 1);
@@ -195,7 +195,7 @@ public class RailwaySignScreen extends ScreenExtension implements IGui {
 				final SignResource sign = RenderRailwaySign.getSign(signId);
 				if (sign != null) {
 					final boolean moveRight = sign.hasCustomText && sign.getFlipCustomText();
-					RenderRailwaySign.drawSign(graphicsHolder, null, signPos, signId, (isBig ? xOffsetBig : xOffsetSmall) + x + (moveRight ? SIGN_BUTTON_SIZE * 2 : 0), BUTTON_Y_START + y, SIGN_BUTTON_SIZE, 2, 2, selectedIds, Direction.UP, 0, (textureId, x1, y1, size, flipTexture) -> {
+					RenderRailwaySign.drawSign(graphicsHolder, null, signPos, signId, (isBig ? xOffsetBig : xOffsetSmall) + x + (moveRight ? SIGN_BUTTON_SIZE * 2 : 0), BUTTON_Y_START + y, SIGN_BUTTON_SIZE, 2, 2, selectedIds, Direction.UP, 0, true, (textureId, x1, y1, size, flipTexture) -> {
 						final GuiDrawing guiDrawing = new GuiDrawing(graphicsHolder);
 						guiDrawing.beginDrawingTexture(sign.getTexture());
 						guiDrawing.drawTexture(x1, y1, x1 + size, y1 + size, flipTexture ? 1 : 0, 0, flipTexture ? 0 : 1, 1);
