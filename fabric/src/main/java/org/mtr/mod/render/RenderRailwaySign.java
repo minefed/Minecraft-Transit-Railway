@@ -259,7 +259,6 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				QrCodeHelper.INSTANCE.renderQrCode(storedMatrixTransformationsNew, QueuedRenderLayer.LIGHT, signSize);
 			} else {
 				if (fullSizeSign) {
-					final float fixedMargin = size * (1 - BlockRailwaySign.SMALL_SIGN_PERCENTAGE) / 2;
 					final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
 
 					MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
