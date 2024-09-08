@@ -43,4 +43,6 @@ public final class SignResource extends SignResourceSchema {
 	public int getBackgroundColor() {
 		return CustomResourceTools.colorStringToInt(backgroundColor);
 	}
+
+	public boolean getFullSizeSign() { return fullSizeSign; }
 }
