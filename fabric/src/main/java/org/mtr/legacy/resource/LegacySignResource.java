@@ -23,6 +23,7 @@ public final class LegacySignResource extends SignResourceSchema {
 		jsonObject.addProperty("flipCustomText", flip_custom_text);
 		jsonObject.addProperty("small", small);
 		jsonObject.addProperty("backgroundColor", background_color);
+		jsonObject.addProperty("fullSizeSign", full_size_sign);
 		signResources.add(new SignResource(new JsonReader(jsonObject)));
 	}
 }
