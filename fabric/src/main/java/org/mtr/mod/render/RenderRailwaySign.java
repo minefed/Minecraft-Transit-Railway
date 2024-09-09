@@ -259,7 +259,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				storedMatrixTransformationsNew.add(graphicsHolderNew -> graphicsHolderNew.translate(x, y, 0));
 				QrCodeHelper.INSTANCE.renderQrCode(storedMatrixTransformationsNew, QueuedRenderLayer.LIGHT, signSize);
 			} else {
-				if (fullSizeSign && isGui == false) {
+				if (fullSizeSign && !isGui) {
 					final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
 
 					MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
