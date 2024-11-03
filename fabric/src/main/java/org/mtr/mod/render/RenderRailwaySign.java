@@ -252,22 +252,16 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				});
 			}
 		} else {
-			if (storedMatrixTransformations != null && isTransportSystemMap) {
-				final StoredMatrixTransformations storedMatrixTransformationsNew = storedMatrixTransformations.copy();
-				storedMatrixTransformationsNew.add(graphicsHolderNew -> graphicsHolderNew.translate(x, y, 0));
-				QrCodeHelper.INSTANCE.renderQrCode(storedMatrixTransformationsNew, QueuedRenderLayer.LIGHT, signSize);
-			} else {
-				if (fullSizeSign && isGui == false) {
-					final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
+			if (fullSizeSign && isGui == false) {
+				final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
 
-					MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
-						storedMatrixTransformations.transform(graphicsHolderNew, offset);
-						IDrawing.drawTexture(graphicsHolderNew, x + margin, y + margin, 0, maxWidth, size, 0, 0, 0, 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
-						graphicsHolderNew.pop();
-					});
-				} else {
-					drawTexture.drawTexture(sign.getTexture(), x + margin, y + margin, signSize, flipTexture);
-				}
+				MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
+					storedMatrixTransformations.transform(graphicsHolderNew, offset);
+					IDrawing.drawTexture(graphicsHolderNew, x + margin, y + margin, 0, maxWidth, size, 0, 0, 0, 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
+					graphicsHolderNew.pop();
+				});
+			} else {
+				drawTexture.drawTexture(sign.getTexture(), x + margin, y + margin, signSize, flipTexture);
 			}
 
 			if (hasCustomText) {
