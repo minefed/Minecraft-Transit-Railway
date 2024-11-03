@@ -253,11 +253,13 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 			}
 		} else {
 			if (fullSizeSign && !isGui) {
-				final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
+				final float fixedMargin = size * (1 - BlockRailwaySign.SMALL_SIGN_PERCENTAGE) / 8;
+				final float maxWidth = Math.max(0, maxWidthRight * size - fixedMargin * 2);
+				final float start = x + size + fixedMargin;
 
 				MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
 					storedMatrixTransformations.transform(graphicsHolderNew, offset);
-					IDrawing.drawTexture(graphicsHolderNew, x + margin, y + margin, 0, maxWidth, size, 0, 0, 0, 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
+					IDrawing.drawTexture(graphicsHolderNew, x + margin, y + margin, 0, start + maxWidth, size, 0, 0, 0, 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
 					graphicsHolderNew.pop();
 				});
 			} else {
