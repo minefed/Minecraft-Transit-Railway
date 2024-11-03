@@ -13,7 +13,6 @@ import org.mtr.mapping.mapper.BlockEntityRenderer;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
-import org.mtr.mod.QrCodeHelper;
 import org.mtr.mod.block.BlockRailwaySign;
 import org.mtr.mod.block.BlockStationNameBase;
 import org.mtr.mod.block.IBlock;
@@ -138,7 +137,6 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		final boolean isLine = signId.equals("line") || signId.equals("line_flipped");
 		final boolean isPlatform = signId.equals("platform") || signId.equals("platform_flipped");
 		final boolean isStation = signId.equals("station") || signId.equals("station_flipped");
-		final boolean isTransportSystemMap = signId.equals("transport_system_map") || signId.equals("transport_system_map_text") || signId.equals("transport_system_map_text_flipped");
 
 		if (storedMatrixTransformations != null && isExit) {
 			final Station station = InitClient.findStation(pos);

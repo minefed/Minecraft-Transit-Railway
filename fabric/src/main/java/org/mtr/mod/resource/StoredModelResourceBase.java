@@ -35,7 +35,7 @@ public interface StoredModelResourceBase {
 						new PositionDefinitions(),
 						""
 				);
-				tempDynamicVehicleModel[0].writeFloorsAndDoorways(new ObjectArraySet<>(), new ObjectArraySet<>(), new Object2ObjectOpenHashMap<>(), materialGroups, new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>());
+				tempDynamicVehicleModel[0].writeFloorsAndDoorways(new ObjectArrayList<>(), new ObjectArrayList<>(), new Object2ObjectOpenHashMap<>(), materialGroups, new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>());
 				tempOptimizedModel[0] = OptimizedModelWrapper.fromMaterialGroups(materialGroups.get(PartCondition.NORMAL));
 			});
 			models = new ObjectObjectImmutablePair<>(tempOptimizedModel[0], tempDynamicVehicleModel[0]);
@@ -50,7 +50,7 @@ public interface StoredModelResourceBase {
 					new PositionDefinitions(),
 					""
 			);
-			dynamicVehicleModel.writeFloorsAndDoorways(new ObjectArraySet<>(), new ObjectArraySet<>(), new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>(), objModels);
+			dynamicVehicleModel.writeFloorsAndDoorways(new ObjectArrayList<>(), new ObjectArrayList<>(), new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>(), new Object2ObjectOpenHashMap<>(), objModels);
 			models = new ObjectObjectImmutablePair<>(OptimizedModelWrapper.fromObjModels(objModels.get(PartCondition.NORMAL)), dynamicVehicleModel);
 		} else {
 			models = new ObjectObjectImmutablePair<>(null, null);
@@ -74,7 +74,7 @@ public interface StoredModelResourceBase {
 			}
 		} else {
 			if (dynamicVehicleModel != null) {
-				dynamicVehicleModel.render(storedMatrixTransformations, null, light, new ObjectArrayList<>());
+				dynamicVehicleModel.render(storedMatrixTransformations, null, 0, new int[]{0}, light, new ObjectArrayList<>());
 			}
 		}
 	}
