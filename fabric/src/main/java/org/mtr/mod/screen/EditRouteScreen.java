@@ -16,6 +16,8 @@ import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.generated.lang.TranslationProvider;
+import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
+import org.mtr.mod.packet.PacketSetRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketUpdateData;
 
 public class EditRouteScreen extends EditNameColorScreenBase<Route> implements IGui {
@@ -33,8 +35,8 @@ public class EditRouteScreen extends EditNameColorScreenBase<Route> implements I
 
 	private static final int CHECKBOX_WIDTH = 160;
 
-	public EditRouteScreen(Route route, DashboardScreen dashboardScreen) {
-		super(route, dashboardScreen, TranslationProvider.GUI_MTR_ROUTE_NAME, TranslationProvider.GUI_MTR_ROUTE_COLOR);
+	public EditRouteScreen(Route route, ScreenExtension previousScreenExtension) {
+		super(route, TranslationProvider.GUI_MTR_ROUTE_NAME, TranslationProvider.GUI_MTR_ROUTE_COLOR, previousScreenExtension);
 
 		textFieldLightRailRouteNumber = new TextFieldWidgetExtension(0, 0, 0, SQUARE_SIZE, 256, TextCase.DEFAULT, null, null);
 		buttonRouteType = new ButtonWidgetExtension(0, 0, 0, SQUARE_SIZE, TranslationProvider.GUI_MTR_ADD_VALUE.getMutableText(), button -> setRouteType(route, route.getRouteType().next()));
@@ -83,7 +85,7 @@ public class EditRouteScreen extends EditNameColorScreenBase<Route> implements I
 		}
 
 		setIsRouteHidden(data.getHidden());
-		// TODO setDisableNextStationAnnouncements(data.disableNextStationAnnouncements);
+		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketCheckRouteIdHasDisabledAnnouncements(data.getId(), this::setDisableNextStationAnnouncements));
 		setIsClockwise(data.getCircularState() == Route.CircularState.CLOCKWISE);
 		setIsAntiClockwise(data.getCircularState() == Route.CircularState.ANTICLOCKWISE);
 	}
@@ -110,7 +112,8 @@ public class EditRouteScreen extends EditNameColorScreenBase<Route> implements I
 
 		data.setRouteNumber(textFieldLightRailRouteNumber.getText2());
 		data.setHidden(buttonIsRouteHidden.isChecked2());
-		// TODO data.disableNextStationAnnouncements = buttonDisableNextStationAnnouncements.isChecked2();
+		final boolean routeIdHasDisabledAnnouncements = buttonDisableNextStationAnnouncements.isChecked2();
+		MinecraftClientData.getInstance().setRouteIdHasDisabledAnnouncements(data.getId(), routeIdHasDisabledAnnouncements);
 
 		if (isCircular) {
 			data.setCircularState(buttonIsClockwiseRoute.isChecked2() ? Route.CircularState.CLOCKWISE : buttonIsAntiClockwiseRoute.isChecked2() ? Route.CircularState.ANTICLOCKWISE : Route.CircularState.NONE);
@@ -119,6 +122,7 @@ public class EditRouteScreen extends EditNameColorScreenBase<Route> implements I
 		}
 
 		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketUpdateData(new UpdateDataRequest(MinecraftClientData.getDashboardInstance()).addRoute(data)));
+		InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketSetRouteIdHasDisabledAnnouncements(data.getId(), routeIdHasDisabledAnnouncements));
 	}
 
 	private void setRouteType(Route route, RouteType newRouteType) {
