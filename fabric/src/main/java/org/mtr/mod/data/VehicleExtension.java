@@ -1,5 +1,7 @@
 package org.mtr.mod.data;
 
+import net.minecraft.sound.SoundCategory;
+import net.minecraft.sound.SoundEvent;
 import org.mtr.core.data.Data;
 import org.mtr.core.data.PathData;
 import org.mtr.core.data.Vehicle;
@@ -8,8 +10,10 @@ import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.tool.Utilities;
 import org.mtr.core.tool.Vector;
 import org.mtr.libraries.com.google.gson.JsonObject;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.*;
+import org.mtr.mapping.mapper.SoundHelper;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
@@ -25,14 +29,20 @@ import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketTurnOnBlockEntity;
 import org.mtr.mod.resource.VehicleResource;
+import org.mtr.mod.sound.OffsetSoundHelper;
 
 import javax.annotation.Nullable;
+import java.util.ArrayList;
 
 public class VehicleExtension extends Vehicle implements Utilities {
 
 	private double oldSpeed;
 
+	private ArrayList<VehicleAnnounce> announces = new ArrayList<>();
+
 	public final PersistentVehicleData persistentVehicleData;
+
+	private static final Long2ObjectAVLTreeMap<ObjectArrayList<Runnable>> QUEUE = new Long2ObjectAVLTreeMap<>();
 
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
@@ -74,6 +84,34 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		final String thisRouteDestination = vehicleExtraData.getThisRouteDestination();
 		final String nextRouteDestination = vehicleExtraData.getNextRouteDestination();
 		final long thisRouteId = vehicleExtraData.getThisRouteId();
+
+		if (!announces.isEmpty()) {
+			announces.forEach(announcer -> {
+				if (!announcer.uuidIsListening(clientPlayerEntity.getUuidAsString())) {
+					final long currentMillis = System.currentTimeMillis();
+					final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
+
+					QUEUE.put(currentMillis + (long) announcer.getDelay() * MILLIS_PER_SECOND, tasks);
+					announcer.addListenerUuid(clientPlayerEntity.getUuidAsString());
+
+					tasks.add(() -> {
+						float offset = 0.0f;
+
+						if (announcer.getCurrentPlayTime() > announcer.getDelay()) {
+							offset = (float) (announcer.getCurrentPlayTime() - announcer.getDelay());
+						}
+
+						OffsetSoundHelper.playSound(
+								SoundEvent.of(new net.minecraft.util.Identifier(announcer.getSoundId())),
+								SoundCategory.BLOCKS,
+								1.0f,
+								1.0f,
+								offset
+						);
+					});
+				}
+			});
+		}
 
 		if (VehicleRidingMovement.isRiding(id)) {
 			// Render client action bar floating text
@@ -209,8 +247,8 @@ public class VehicleExtension extends Vehicle implements Utilities {
 							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
 						} else if (block.data instanceof BlockTrainAnnouncer && VehicleRidingMovement.isRiding(id)) {
 							final BlockEntity blockEntity = clientWorld.getBlockEntity(offsetBlockPos);
-							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity) {
-								((BlockTrainAnnouncer.BlockEntity) blockEntity.data).announce();
+							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity announcerData) {
+                                announces.add(new VehicleAnnounce(announcerData.getSoundId(), announcerData.getDelay()));
 							}
 						}
 					}
