@@ -2,6 +2,10 @@
 
 Forked project of [Minecraft Transit Railway](https://github.com/Minecraft-Transit-Railway/Minecraft-Transit-Railway).
 
+## Notice regarding changes
+- Changes (additions, modifications, deletions) to this repository will only be added to the Fabric client.
+- All changes to this repository are distributed under the MIT License, so you are free to use them as you wish.
+
 ## Disclaimer
 
 - This project has not been officially released. if you are not using it on a Minefed server, we recommend using the official project linked above.
