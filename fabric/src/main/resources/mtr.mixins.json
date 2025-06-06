@@ -8,7 +8,8 @@
 		"PlayerTeleportationStateAccessor"
 	],
 	"client": [
-		"ClientWorldRenderingMixin"
+		"ClientWorldRenderingMixin",
+		"SoundManagerMixin"
 	],
 	"server": [],
 	"injectors": {
