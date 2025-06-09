@@ -1,24 +1,14 @@
 package org.mtr.mod.block;
 
 import org.mtr.core.tool.Utilities;
-import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
-import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.BlockEntityExtension;
-import org.mtr.mapping.mapper.SoundHelper;
-import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.BlockEntityTypes;
-import org.mtr.mod.client.IDrawing;
 
 import javax.annotation.Nonnull;
-import java.util.Arrays;
-import java.util.stream.Collectors;
 
 public class BlockTrainAnnouncer extends BlockTrainSensorBase {
-
-	private static final Long2ObjectAVLTreeMap<ObjectArrayList<Runnable>> QUEUE = new Long2ObjectAVLTreeMap<>();
 
 	@Nonnull
 	@Override
@@ -27,15 +17,6 @@ public class BlockTrainAnnouncer extends BlockTrainSensorBase {
 	}
 
 	public static void processQueue() {
-		final LongArrayList itemsToRemove = new LongArrayList();
-		final long currentMillis = System.currentTimeMillis();
-		QUEUE.forEach((time, tasks) -> {
-			if (time <= currentMillis) {
-				tasks.forEach(Runnable::run);
-				itemsToRemove.add(time.longValue());
-			}
-		});
-		itemsToRemove.forEach(QUEUE::remove);
 	}
 
 	public static class BlockEntity extends BlockEntityBase implements Utilities {
@@ -43,8 +24,6 @@ public class BlockTrainAnnouncer extends BlockTrainSensorBase {
 		private String message = "";
 		private String soundId = "";
 		private int delay;
-		private long lastAnnouncedMillis;
-		private static final int ANNOUNCE_COOLDOWN_MILLIS = 20000;
 		private static final String KEY_MESSAGE = "message";
 		private static final String KEY_SOUND_ID = "sound_id";
 		private static final String KEY_DELAY = "delay";
@@ -86,26 +65,6 @@ public class BlockTrainAnnouncer extends BlockTrainSensorBase {
 
 		public int getDelay() {
 			return delay;
-		}
-
-		public void announce() {
-			final long currentMillis = System.currentTimeMillis();
-			if (currentMillis - lastAnnouncedMillis >= ANNOUNCE_COOLDOWN_MILLIS) {
-				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
-				QUEUE.put(currentMillis + (long) delay * MILLIS_PER_SECOND, tasks);
-				if (!message.isEmpty()) {
-					tasks.add(() -> IDrawing.narrateOrAnnounce(Utilities.formatName(message), Arrays.stream(message.split("\\|")).map(TextHelper::literal).collect(Collectors.toCollection(ObjectArrayList::new))));
-				}
-				if (!soundId.isEmpty()) {
-					tasks.add(() -> {
-						final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
-						if (clientPlayerEntity != null) {
-							clientPlayerEntity.playSound(SoundHelper.createSoundEvent(new Identifier(soundId)), 1000, 1);
-						}
-					});
-				}
-				lastAnnouncedMillis = currentMillis;
-			}
 		}
 	}
 }

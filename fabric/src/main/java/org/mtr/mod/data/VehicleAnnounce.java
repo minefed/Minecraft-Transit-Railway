@@ -1,24 +1,34 @@
 package org.mtr.mod.data;
 
+import org.mtr.mapping.holder.Identifier;
+import org.mtr.mod.sound.OffsetSoundHelper;
+
 import java.util.ArrayList;
 
 public class VehicleAnnounce {
     private final String soundId;
 
-    private double currentPlayTime;
-
     private final int delay;
 
-    private ArrayList<String> listenerUuids = new ArrayList<>();
+    private final ArrayList<String> listenerUuids = new ArrayList<>();
+
+    private long playStartTime;
+
+    private double totalLength;
 
     public VehicleAnnounce(String soundId, int delay) {
         this.soundId = soundId;
         this.delay = delay;
-        this.currentPlayTime = delay != 0 ? -(delay) : 0;
+        this.playStartTime = System.currentTimeMillis();
+        this.totalLength = OffsetSoundHelper.getDuration(new Identifier(soundId)) + (delay * 1000);
     }
 
-    public double getCurrentPlayTime() {
-        return currentPlayTime;
+    public long getPlayStartTime() {
+        return playStartTime;
+    }
+
+    public double getTotalLength() {
+        return totalLength;
     }
 
     public String getSoundId() {
@@ -27,10 +37,6 @@ public class VehicleAnnounce {
 
     public int getDelay() {
         return delay;
-    }
-
-    public void setCurrentPlayTime(double currentPlayTime) {
-        this.currentPlayTime = currentPlayTime;
     }
 
     public void addListenerUuid(String uuid) {

@@ -22,6 +22,8 @@ public class OffsetSoundInstance extends AbstractSoundInstance {
     ) {
         super(soundEvent, soundCategory, random);
 
+        System.out.println("[NewAnnouncer] soundOffset: " + startOffsetSecond);
+
         this.volume = volume;
         this.pitch = pitch;
         this.x = x;

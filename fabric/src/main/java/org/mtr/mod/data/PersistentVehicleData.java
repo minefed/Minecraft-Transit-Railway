@@ -8,12 +8,14 @@ import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectImmutableList;
 import org.mtr.mapping.holder.BlockPos;
+import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mod.client.Oscillation;
 import org.mtr.mod.client.ScrollingText;
 import org.mtr.mod.resource.VehicleResource;
 import org.mtr.mod.sound.VehicleSoundBase;
 
 import java.util.function.Supplier;
+import java.util.stream.Collectors;
 
 public final class PersistentVehicleData {
 
@@ -29,6 +31,7 @@ public final class PersistentVehicleData {
 	private final ObjectArrayList<VehicleSoundBase> vehicleSoundBaseList = new ObjectArrayList<>();
 	private final ObjectArrayList<ObjectArrayList<ScrollingText>> scrollingTexts = new ObjectArrayList<>();
 	private final ObjectArrayList<Oscillation> oscillations = new ObjectArrayList<>();
+	private final ObjectArrayList<VehicleAnnounce> vehicleAnnounces = new ObjectArrayList<>();
 
 	public PersistentVehicleData(ObjectImmutableList<VehicleCar> immutableVehicleCars, TransportMode transportMode) {
 		rayTracing = new boolean[immutableVehicleCars.size()];
@@ -113,5 +116,23 @@ public final class PersistentVehicleData {
 			list.add(supplier.get());
 		}
 		return list.get(index);
+	}
+
+	public ObjectArrayList<VehicleAnnounce> getVehicleAnnounces() {
+		return vehicleAnnounces;
+	}
+
+	public ObjectArrayList<VehicleAnnounce> getShouldAnnounces(ClientPlayerEntity playerEntity) {
+		return vehicleAnnounces.stream()
+			.filter(announce -> !announce.uuidIsListening(playerEntity.getUuidAsString()))
+			.collect(Collectors.toCollection(ObjectArrayList::new));
+	}
+
+	public void addAnnounce(VehicleAnnounce announce) {
+		this.vehicleAnnounces.add(announce);
+	}
+
+	public void removeAnnounce(String soundId) {
+		this.vehicleAnnounces.removeIf(announce -> announce.getSoundId().equals(soundId));
 	}
 }

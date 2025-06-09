@@ -13,7 +13,6 @@ import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.*;
-import org.mtr.mapping.mapper.SoundHelper;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.InitClient;
@@ -32,17 +31,21 @@ import org.mtr.mod.resource.VehicleResource;
 import org.mtr.mod.sound.OffsetSoundHelper;
 
 import javax.annotation.Nullable;
-import java.util.ArrayList;
+import java.util.List;
+import java.util.Timer;
+import java.util.TimerTask;
 
 public class VehicleExtension extends Vehicle implements Utilities {
 
 	private double oldSpeed;
 
-	private ArrayList<VehicleAnnounce> announces = new ArrayList<>();
-
 	public final PersistentVehicleData persistentVehicleData;
 
 	private static final Long2ObjectAVLTreeMap<ObjectArrayList<Runnable>> QUEUE = new Long2ObjectAVLTreeMap<>();
+
+	private long lastAnnouncerDetectTime;
+
+	private static final int ANNOUNCE_COOLDOWN_MILLIS = 3000;
 
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
@@ -84,36 +87,57 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		final String thisRouteDestination = vehicleExtraData.getThisRouteDestination();
 		final String nextRouteDestination = vehicleExtraData.getNextRouteDestination();
 		final long thisRouteId = vehicleExtraData.getThisRouteId();
+		final List<VehicleAnnounce> vehicleAnnounces = persistentVehicleData.getVehicleAnnounces();
 
-		if (!announces.isEmpty()) {
-			announces.forEach(announcer -> {
-				if (!announcer.uuidIsListening(clientPlayerEntity.getUuidAsString())) {
-					final long currentMillis = System.currentTimeMillis();
-					final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
+		if (!vehicleAnnounces.isEmpty()) {
+			long currentTimeMillis = System.currentTimeMillis();
 
-					QUEUE.put(currentMillis + (long) announcer.getDelay() * MILLIS_PER_SECOND, tasks);
-					announcer.addListenerUuid(clientPlayerEntity.getUuidAsString());
-
-					tasks.add(() -> {
-						float offset = 0.0f;
-
-						if (announcer.getCurrentPlayTime() > announcer.getDelay()) {
-							offset = (float) (announcer.getCurrentPlayTime() - announcer.getDelay());
-						}
-
-						OffsetSoundHelper.playSound(
-								SoundEvent.of(new net.minecraft.util.Identifier(announcer.getSoundId())),
-								SoundCategory.BLOCKS,
-								1.0f,
-								1.0f,
-								offset
-						);
-					});
+			vehicleAnnounces.forEach(announce -> {
+				if (announce.getPlayStartTime() + announce.getTotalLength() > currentTimeMillis) {
+					persistentVehicleData.removeAnnounce(announce.getSoundId());
 				}
 			});
 		}
 
 		if (VehicleRidingMovement.isRiding(id)) {
+			List<VehicleAnnounce> shouldAnnounces = this.persistentVehicleData.getShouldAnnounces(clientPlayerEntity);
+
+			if (!shouldAnnounces.isEmpty()) {
+				shouldAnnounces.forEach(announcer -> {
+					long announceDelayMs = 0;
+
+					announcer.addListenerUuid(clientPlayerEntity.getUuidAsString());
+
+					if (announcer.getDelay() != 0) {
+						if (System.currentTimeMillis() - announcer.getPlayStartTime() < announcer.getDelay() * 1000L) {
+							announceDelayMs = (announcer.getDelay() * 1000L) - (System.currentTimeMillis() - announcer.getPlayStartTime());
+						}
+					}
+
+					Timer timer = new Timer();
+
+					timer.schedule(new TimerTask() {
+						@Override
+						public void run() {
+							float offset = 0.0f;
+							org.mtr.mapping.holder.Identifier soundId = new org.mtr.mapping.holder.Identifier(announcer.getSoundId());
+
+							if ((System.currentTimeMillis() - announcer.getPlayStartTime()) > (announcer.getDelay() * 1000L)) {
+								offset = (System.currentTimeMillis() - announcer.getPlayStartTime()) - (announcer.getDelay() * 1000L);
+							}
+
+							OffsetSoundHelper.playSound(
+									SoundEvent.of(soundId.data),
+									SoundCategory.BLOCKS,
+									1.0f,
+									1.0f,
+									offset / 1000
+							);
+						}
+					}, announceDelayMs);
+				});
+			}
+
 			// Render client action bar floating text
 			if (VehicleRidingMovement.showShiftProgressBar() && (!isCurrentlyManual || !isHoldingKey(clientPlayerEntity))) {
 				final double adjustedSpeed = getAdjustedSpeed();
@@ -245,10 +269,14 @@ public class VehicleExtension extends Vehicle implements Utilities {
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
 						if (block.data instanceof BlockTrainRedstoneSensor && IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED) < 2) {
 							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
-						} else if (block.data instanceof BlockTrainAnnouncer && VehicleRidingMovement.isRiding(id)) {
+						} else if (block.data instanceof BlockTrainAnnouncer) {
+							final long currentMillis = System.currentTimeMillis();
 							final BlockEntity blockEntity = clientWorld.getBlockEntity(offsetBlockPos);
 							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity announcerData) {
-                                announces.add(new VehicleAnnounce(announcerData.getSoundId(), announcerData.getDelay()));
+								if (currentMillis - lastAnnouncerDetectTime >= ANNOUNCE_COOLDOWN_MILLIS) {
+									this.persistentVehicleData.addAnnounce(new VehicleAnnounce(announcerData.getSoundId(), announcerData.getDelay()));
+									lastAnnouncerDetectTime = currentMillis;
+								}
 							}
 						}
 					}
