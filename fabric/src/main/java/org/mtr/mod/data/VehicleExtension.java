@@ -87,13 +87,12 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		final String thisRouteDestination = vehicleExtraData.getThisRouteDestination();
 		final String nextRouteDestination = vehicleExtraData.getNextRouteDestination();
 		final long thisRouteId = vehicleExtraData.getThisRouteId();
-		final List<VehicleAnnounce> vehicleAnnounces = persistentVehicleData.getVehicleAnnounces();
+		final long currentTimeMillis = System.currentTimeMillis();
+		List<VehicleAnnounce> vehicleAnnounces = persistentVehicleData.getVehicleAnnounces();
 
 		if (!vehicleAnnounces.isEmpty()) {
-			long currentTimeMillis = System.currentTimeMillis();
-
 			vehicleAnnounces.forEach(announce -> {
-				if (announce.getPlayStartTime() + announce.getTotalLength() > currentTimeMillis) {
+				if (announce.getPlayStartTime() != -1 && announce.getPlayStartTime() + announce.getTotalLength() > currentTimeMillis) {
 					persistentVehicleData.removeAnnounce(announce.getSoundId());
 				}
 			});
@@ -262,19 +261,23 @@ public class VehicleExtension extends Vehicle implements Utilities {
 		final Vector headPosition = getHeadPosition();
 		for (int xOffset = -1; xOffset <= 1; xOffset++) {
 			for (int yOffset = -1; yOffset <= 1; yOffset++) {
-				for (int zOffset = -1; zOffset <= 1; zOffset++) {
+				for (int zOffset = -3; zOffset <= 1; zOffset++) {
 					final BlockPos offsetBlockPos = Init.newBlockPos(headPosition.x + xOffset, headPosition.y + yOffset, headPosition.z + zOffset);
 					final BlockState blockState = clientWorld.getBlockState(offsetBlockPos);
 					final Block block = blockState.getBlock();
+
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
 						if (block.data instanceof BlockTrainRedstoneSensor && IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED) < 2) {
 							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
 						} else if (block.data instanceof BlockTrainAnnouncer) {
 							final long currentMillis = System.currentTimeMillis();
 							final BlockEntity blockEntity = clientWorld.getBlockEntity(offsetBlockPos);
+
 							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity announcerData) {
 								if (currentMillis - lastAnnouncerDetectTime >= ANNOUNCE_COOLDOWN_MILLIS) {
-									this.persistentVehicleData.addAnnounce(new VehicleAnnounce(announcerData.getSoundId(), announcerData.getDelay()));
+									VehicleAnnounce vehicleAnnounce = new VehicleAnnounce(announcerData.getSoundId(), announcerData.getDelay());
+
+									this.persistentVehicleData.addAnnounce(vehicleAnnounce);
 									lastAnnouncerDetectTime = currentMillis;
 								}
 							}
