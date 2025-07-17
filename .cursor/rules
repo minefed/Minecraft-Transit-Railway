@@ -1,3 +1,11 @@
+---
+description: Minecraft 1.20.4 Fabric Mod
+alwaysApply: true
+globs:
+  - "**/*"
+---
+
+- 항상 프로젝트 루트를 참조합니다.
 - 본 프로젝트는 Minecraft 1.20.4를 지원하는 Fabric / Forge로 개발된 모드입니다.
 - 요청 사항을 수행할때는 Fabric 코드로만 작성해도 괜찮습니다, 이제 Forge 코드는 업데이트하지 않을 예정입니다.
 - 모든 답변은 한국어로 하세요.
