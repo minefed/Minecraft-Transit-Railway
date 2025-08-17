@@ -22,9 +22,9 @@ dependencies {
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${buildTools.getFabricApiVersion()}"
 	modApi("com.terraformersmc:modmenu:${buildTools.getModMenuVersion()}") { exclude group: "net.fabricmc", module: "fabric-loader" }
 	shadowImplementation "org.mtr:Minecraft-Mappings-fabric-${minecraftVersion}:0.0.1-dev"
-	testImplementation "org.junit.jupiter:junit-jupiter-api:+"
-	testImplementation "org.junit.platform:junit-platform-launcher:+"
-	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:+"
+	testImplementation "org.junit.jupiter:junit-jupiter-api:5.+"
+	testImplementation "org.junit.platform:junit-platform-launcher:1.+"
+	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.+"
 
 	if (buildTools.hasJadeSupport()) {
 		modCompileOnly "maven.modrinth:jade:${buildTools.getJadeVersion()}"
@@ -48,12 +48,12 @@ java {
 }
 
 tasks.register("setupWebsiteFiles") {
-	copy {
-		outputs.upToDateWhen { false }
-		from zipTree("../libs/Transport-Simulation-Core-Build-Tools.jar")
-		into "../buildSrc/src/main/resources"
-		include "website/*.json", "website/src/styles.css", "website/src/theme.scss"
-	}
+//	copy {
+//		outputs.upToDateWhen { false }
+//		from zipTree("../libs/Transport-Simulation-Core-Build-Tools.jar")
+//		into "../buildSrc/src/main/resources"
+//		include "website/*.json", "website/src/styles.css", "website/src/theme.scss"
+//	}
 
 	Generator.generateTypeScript(project, "schema/resource", "../buildSrc/src/main/resources/website/src/app/entity/generated")
 }

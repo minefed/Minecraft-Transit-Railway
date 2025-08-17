@@ -4,18 +4,16 @@ import com.logisticscraft.occlusionculling.util.Vec3d;
 import org.mtr.core.data.*;
 import org.mtr.core.data.Position;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.*;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.EntityHelper;
 import org.mtr.mod.Init;
-import org.mtr.mod.InitClient;
-import org.mtr.mod.KeyBindings;
 import org.mtr.mod.block.BlockNode;
 import org.mtr.mod.data.PersistentVehicleData;
 import org.mtr.mod.data.VehicleExtension;
-import org.mtr.mod.packet.PacketDriveTrain;
 import org.mtr.mod.screen.DashboardListItem;
 
 import javax.annotation.Nullable;
@@ -25,6 +23,7 @@ import java.util.stream.Collectors;
 
 public final class MinecraftClientData extends ClientData {
 
+	public final Long2ObjectOpenHashMap<SimplifiedRoute> simplifiedRouteIdMap = new Long2ObjectOpenHashMap<>();
 	public final ObjectArraySet<VehicleExtension> vehicles = new ObjectArraySet<>();
 	public final Long2ObjectAVLTreeMap<PersistentVehicleData> vehicleIdToPersistentVehicleData = new Long2ObjectAVLTreeMap<>();
 	public final Long2ObjectAVLTreeMap<LiftWrapper> liftWrapperList = new Long2ObjectAVLTreeMap<>();
@@ -75,6 +74,8 @@ public final class MinecraftClientData extends ClientData {
 				railWrapper.rail = rail;
 			}
 		}));
+
+		simplifiedRoutes.forEach(simplifiedRoute -> simplifiedRouteIdMap.put(simplifiedRoute.getId(), simplifiedRoute));
 	}
 
 	@Nullable
@@ -143,26 +144,6 @@ public final class MinecraftClientData extends ClientData {
 	public static void reset() {
 		MinecraftClientData.instance = new MinecraftClientData();
 		MinecraftClientData.dashboardInstance = new MinecraftClientData();
-	}
-
-	public static void tick() {
-		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
-		final ClientPlayerEntity clientPlayerEntity = minecraftClient.getPlayerMapped();
-		final boolean tempPressingAccelerate = KeyBindings.TRAIN_ACCELERATE.isPressed();
-		final boolean tempPressingBrake = KeyBindings.TRAIN_BRAKE.isPressed();
-		final boolean tempPressingDoors = KeyBindings.TRAIN_TOGGLE_DOORS.isPressed();
-
-		if (VehicleExtension.isHoldingKey(clientPlayerEntity) && (pressingAccelerate || pressingBrake || pressingDoors)) {
-			InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketDriveTrain(
-					tempPressingAccelerate && !pressingAccelerate,
-					tempPressingBrake && !pressingBrake,
-					tempPressingDoors && !pressingDoors
-			));
-		}
-
-		pressingAccelerate = tempPressingAccelerate;
-		pressingBrake = tempPressingBrake;
-		pressingDoors = tempPressingDoors;
 	}
 
 	public static boolean hasPermission() {

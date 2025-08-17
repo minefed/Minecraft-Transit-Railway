@@ -5,11 +5,14 @@ import org.mtr.core.data.Vehicle;
 import org.mtr.core.data.VehicleCar;
 import org.mtr.core.data.VehicleExtraData;
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectImmutableList;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mod.client.Oscillation;
 import org.mtr.mod.client.ScrollingText;
+import org.mtr.mod.resource.DoorAnimationType;
+import org.mtr.mod.resource.Interpolation;
 import org.mtr.mod.resource.VehicleResource;
 import org.mtr.mod.sound.VehicleSoundBase;
 
@@ -17,6 +20,8 @@ import java.util.function.Supplier;
 
 public final class PersistentVehicleData {
 
+	private double smoothedRailProgress;
+	private double railProgressSmoothingAdjustment;
 	private double doorValue;
 	private double oldDoorValue;
 	private double nextAnnouncementRailProgress;
@@ -29,6 +34,7 @@ public final class PersistentVehicleData {
 	private final ObjectArrayList<VehicleSoundBase> vehicleSoundBaseList = new ObjectArrayList<>();
 	private final ObjectArrayList<ObjectArrayList<ScrollingText>> scrollingTexts = new ObjectArrayList<>();
 	private final ObjectArrayList<Oscillation> oscillations = new ObjectArrayList<>();
+	private final Object2ObjectOpenHashMap<String, DoorMovementInterpolation> doorMovementInterpolations = new Object2ObjectOpenHashMap<>();
 
 	public PersistentVehicleData(ObjectImmutableList<VehicleCar> immutableVehicleCars, TransportMode transportMode) {
 		rayTracing = new boolean[immutableVehicleCars.size()];
@@ -37,6 +43,29 @@ public final class PersistentVehicleData {
 			longestDimensions[i] = Math.max(immutableVehicleCars.get(i).getLength(), immutableVehicleCars.get(i).getWidth());
 		}
 		this.transportMode = transportMode;
+	}
+
+	/**
+	 * Captures the rail progress difference of an incoming vehicle update. This will be used for smoothing out animations.
+	 *
+	 * @param newRailProgress    the rail progress coming from the server
+	 * @param totalVehicleLength the total length of this vehicle
+	 */
+	public void update(double newRailProgress, double totalVehicleLength) {
+		railProgressSmoothingAdjustment = newRailProgress - smoothedRailProgress;
+		if (Math.abs(railProgressSmoothingAdjustment) > totalVehicleLength - 1) {
+			railProgressSmoothingAdjustment = 0;
+		}
+	}
+
+	public double getSmoothedRailProgress(double railProgress, double adjustmentAmount) {
+		if (railProgressSmoothingAdjustment > 0) {
+			railProgressSmoothingAdjustment = Math.max(railProgressSmoothingAdjustment - adjustmentAmount, 0);
+		} else if (railProgressSmoothingAdjustment < 0) {
+			railProgressSmoothingAdjustment = Math.min(railProgressSmoothingAdjustment + adjustmentAmount, 0);
+		}
+		smoothedRailProgress = railProgress - railProgressSmoothingAdjustment;
+		return smoothedRailProgress;
 	}
 
 	public ObjectArrayList<ScrollingText> getScrollingText(int carNumber) {
@@ -64,6 +93,23 @@ public final class PersistentVehicleData {
 
 	public double getDoorValue() {
 		return doorValue;
+	}
+
+	public float getInterpolatedDoorValue(DoorAnimationType doorAnimationType, double doorZMultiplier, boolean flipped, double doorOverrideValue, boolean opening) {
+		final String key = doorZMultiplier + "_" + doorAnimationType + "_" + flipped;
+		final DoorMovementInterpolation doorMovementInterpolation = doorMovementInterpolations.get(key);
+		final double value = doorAnimationType.getDoorAnimationZ(doorZMultiplier, flipped, doorValue, opening);
+		final float interpolatedDoorValue;
+		if (doorMovementInterpolation == null) {
+			final DoorMovementInterpolation newDoorMovementInterpolation = new DoorMovementInterpolation();
+			doorMovementInterpolations.put(key, newDoorMovementInterpolation);
+			interpolatedDoorValue = newDoorMovementInterpolation.setAndGet(value, opening);
+		} else {
+			interpolatedDoorValue = doorMovementInterpolation.setAndGet(value, opening);
+		}
+
+		final float newDoorOverrideValue = (float) (doorOverrideValue * doorZMultiplier) * (flipped ? -1 : 1);
+		return Math.abs(newDoorOverrideValue) > Math.abs(interpolatedDoorValue) ? newDoorOverrideValue : interpolatedDoorValue;
 	}
 
 	public boolean checkCanOpenDoors() {
@@ -113,5 +159,21 @@ public final class PersistentVehicleData {
 			list.add(supplier.get());
 		}
 		return list.get(index);
+	}
+
+	private static class DoorMovementInterpolation {
+
+		private boolean opening;
+		private final Interpolation interpolation;
+
+		private DoorMovementInterpolation() {
+			this.interpolation = new Interpolation(500);
+		}
+
+		private float setAndGet(double value, boolean opening) {
+			interpolation.setValue(value, this.opening != opening);
+			this.opening = opening;
+			return (float) interpolation.getValue();
+		}
 	}
 }

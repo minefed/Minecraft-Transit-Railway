@@ -6,22 +6,27 @@ import org.mtr.mapping.holder.Identifier;
 import org.mtr.mapping.mapper.ModelPartExtension;
 import org.mtr.mapping.mapper.OptimizedModel;
 import org.mtr.mapping.mapper.OptimizedRenderer;
+import org.mtr.mod.Init;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
 import java.util.stream.Collectors;
 
 public final class OptimizedModelWrapper {
+	/**
+	 * Used as a fallback texture if a face does not have a texture
+	 */
+	public static final Identifier WHITE_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/white.png");
 
 	@Nullable
 	final OptimizedModel optimizedModel;
 
-	public static OptimizedModelWrapper fromMaterialGroups(ObjectArrayList<MaterialGroupWrapper> materialGroupList) {
-		return new OptimizedModelWrapper(OptimizedRenderer.hasOptimizedRendering() ? OptimizedModel.fromMaterialGroups(materialGroupList.stream().map(materialGroup -> materialGroup.materialGroup).filter(Objects::nonNull).collect(Collectors.toList())) : null);
+	public static OptimizedModelWrapper fromMaterialGroups(@Nullable ObjectArrayList<MaterialGroupWrapper> materialGroupList) {
+		return new OptimizedModelWrapper(OptimizedRenderer.hasOptimizedRendering() && materialGroupList != null ? OptimizedModel.fromMaterialGroups(materialGroupList.stream().map(materialGroup -> materialGroup.materialGroup).filter(Objects::nonNull).collect(Collectors.toList())) : null);
 	}
 
-	public static OptimizedModelWrapper fromObjModels(ObjectArrayList<ObjModelWrapper> objModels) {
-		return new OptimizedModelWrapper(OptimizedRenderer.hasOptimizedRendering() ? OptimizedModel.fromObjModels(objModels.stream().map(objModel -> objModel.objModel).filter(Objects::nonNull).collect(Collectors.toList())) : null);
+	public static OptimizedModelWrapper fromObjModels(@Nullable ObjectArrayList<ObjModelWrapper> objModels) {
+		return new OptimizedModelWrapper(OptimizedRenderer.hasOptimizedRendering() && objModels != null ? OptimizedModel.fromObjModels(objModels.stream().map(objModel -> objModel.objModel).filter(Objects::nonNull).collect(Collectors.toList())) : null);
 	}
 
 	private OptimizedModelWrapper(@Nullable OptimizedModel optimizedModel) {

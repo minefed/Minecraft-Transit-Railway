@@ -2,6 +2,7 @@ package org.mtr.mod.resource;
 
 import org.mtr.core.serializer.ReaderBase;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
+import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.generated.resource.RailResourceSchema;
 import org.mtr.mod.render.DynamicVehicleModel;
@@ -17,7 +18,7 @@ public final class RailResource extends RailResourceSchema implements StoredMode
 		super(readerBase, resourceProvider);
 		updateData(readerBase);
 		shouldPreload = Config.getClient().matchesPreloadResourcePattern(id);
-		cachedRailResource = new CachedResource<>(() -> load(modelResource, textureResource, flipTextureV, modelYOffset, resourceProvider), shouldPreload ? Integer.MAX_VALUE : VehicleModel.MODEL_LIFESPAN);
+		cachedRailResource = new CachedResource<>(() -> load(modelResource, textureResource, flipTextureV, 0, resourceProvider), shouldPreload ? Integer.MAX_VALUE : VehicleModel.MODEL_LIFESPAN);
 	}
 
 	/**
@@ -53,7 +54,7 @@ public final class RailResource extends RailResourceSchema implements StoredMode
 	}
 
 	public String getName() {
-		return name;
+		return TextHelper.translatable(name).getString();
 	}
 
 	public int getColor() {
