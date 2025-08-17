@@ -63,7 +63,7 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	public void simulate(long millisElapsed) {
 		final double oldRailProgress = railProgress;
 		oldSpeed = speed;
-		simulate(millisElapsed);
+		simulate(millisElapsed, null, null);
 		persistentVehicleData.tick(railProgress, millisElapsed, vehicleExtraData);
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
 		final ClientWorld clientWorld = minecraftClient.getWorldMapped();
