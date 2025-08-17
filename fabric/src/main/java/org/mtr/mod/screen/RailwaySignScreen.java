@@ -249,7 +249,7 @@ public class RailwaySignScreen extends ScreenExtension implements IGui {
 		int totalPagesBigCount = 1;
 		for (int i = 0; i < allSignIds.size(); i++) {
 			final SignResource sign = RenderRailwaySign.getSign(allSignIds.get(i));
-			final boolean isBig = sign != null && sign.hasCustomText;
+			final boolean isBig = sign != null && (sign.hasCustomText || sign.getFullSizeSign());
 
 			final boolean onPage = (isBig ? indexBig : indexSmall) / pageCount == page;
 			buttonsSelection[i].visible = onPage;

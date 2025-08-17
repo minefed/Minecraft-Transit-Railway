@@ -131,6 +131,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		final boolean hasCustomText = sign.hasCustomText;
 		final boolean flipCustomText = sign.getFlipCustomText();
 		final boolean flipTexture = sign.getFlipTexture();
+		final boolean fullSizeSign = sign.getFullSizeSign();
 		final boolean isExit = signId.equals("exit_letter") || signId.equals("exit_letter_flipped");
 		final boolean isLine = signId.equals("line") || signId.equals("line_flipped");
 		final boolean isPlatform = signId.equals("platform") || signId.equals("platform_flipped");
@@ -252,7 +253,24 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				});
 			}
 		} else {
-			drawTexture.drawTexture(sign.getTexture(), x + margin, y + margin, signSize, flipTexture);
+			if (storedMatrixTransformations != null && isTransportSystemMap) {
+				final StoredMatrixTransformations storedMatrixTransformationsNew = storedMatrixTransformations.copy();
+				storedMatrixTransformationsNew.add(graphicsHolderNew -> graphicsHolderNew.translate(x, y, 0));
+				QrCodeHelper.INSTANCE.renderQrCode(storedMatrixTransformationsNew, QueuedRenderLayer.LIGHT, signSize);
+			} else {
+				if (fullSizeSign) {
+					final float fixedMargin = size * (1 - BlockRailwaySign.SMALL_SIGN_PERCENTAGE) / 2;
+					final float maxWidth = Math.max(0, (flipCustomText ? maxWidthLeft : maxWidthRight) * size - margin * 2);
+
+					MainRenderer.scheduleRender(sign.getTexture(), true, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolderNew, offset) -> {
+						storedMatrixTransformations.transform(graphicsHolderNew, offset);
+						IDrawing.drawTexture(graphicsHolderNew, x + margin, y + margin, 0, maxWidth, size, 0, 0, 0, 1, 1, facing, -1, GraphicsHolder.getDefaultLight());
+						graphicsHolderNew.pop();
+					});
+				} else {
+					drawTexture.drawTexture(sign.getTexture(), x + margin, y + margin, signSize, flipTexture);
+				}
+			}
 
 			if (hasCustomText) {
 				final float fixedMargin = size * (1 - BlockRailwaySign.SMALL_SIGN_PERCENTAGE) / 2;
