@@ -1,0 +1,12 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="ProjectModuleManager">
+    <modules>
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/fabric/Minecraft-Transit-Railway.fabric.main.iml" filepath="$PROJECT_DIR$/.idea/modules/fabric/Minecraft-Transit-Railway.fabric.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/fabric/Minecraft-Transit-Railway.fabric.test.iml" filepath="$PROJECT_DIR$/.idea/modules/fabric/Minecraft-Transit-Railway.fabric.test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/forge/Minecraft-Transit-Railway.forge.main.iml" filepath="$PROJECT_DIR$/.idea/modules/forge/Minecraft-Transit-Railway.forge.main.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/forge/Minecraft-Transit-Railway.forge.test.iml" filepath="$PROJECT_DIR$/.idea/modules/forge/Minecraft-Transit-Railway.forge.test.iml" />
+      <module fileurl="file://$PROJECT_DIR$/.idea/modules/fabric/minefed.Minecraft-Transit-Railway.fabric.main.iml" filepath="$PROJECT_DIR$/.idea/modules/fabric/minefed.Minecraft-Transit-Railway.fabric.main.iml" />
+    </modules>
+  </component>
+</project>

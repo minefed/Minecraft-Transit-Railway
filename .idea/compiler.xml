@@ -1,0 +1,22 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<project version="4">
+  <component name="CompilerConfiguration">
+    <annotationProcessing>
+      <profile name="Gradle Imported" enabled="true">
+        <outputRelativeToContentRoot value="true" />
+        <processorPath useClasspath="false">
+          <entry name="$USER_HOME$/.gradle/caches/modules-2/files-2.1/org.spongepowered/mixin/0.8.7/3d051c66329d162a52fc062f7da912c37904a6a0/mixin-0.8.7-processor.jar" />
+        </processorPath>
+        <module name="Minecraft-Transit-Railway.forge.main" />
+      </profile>
+    </annotationProcessing>
+    <bytecodeTargetLevel target="17" />
+  </component>
+  <component name="JavacSettings">
+    <option name="ADDITIONAL_OPTIONS_OVERRIDE">
+      <module name="Minecraft-Transit-Railway.fabric" options="-AoutRefMapFile=$PROJECT_DIR$/fabric/build/classes/java/main/mtr.refmap.json -AdefaultObfuscationEnv=named:intermediary -Aquiet=true -AoutMapFileNamedIntermediary=$PROJECT_DIR$/fabric/build/loom-cache/mixin-map-net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2.main.tiny -AinMapFileNamedIntermediary=$USER_HOME$/.gradle/caches/fabric-loom/1.20.4/net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2/mappings.tiny" />
+      <module name="Minecraft-Transit-Railway.fabric.test" options="-AoutRefMapFile=$PROJECT_DIR$/fabric/build/classes/java/test/test-mtr.refmap.json -AdefaultObfuscationEnv=named:intermediary -Aquiet=true -AoutMapFileNamedIntermediary=$PROJECT_DIR$/fabric/build/loom-cache/mixin-map-net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2.test.tiny -AinMapFileNamedIntermediary=$USER_HOME$/.gradle/caches/fabric-loom/1.20.4/net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2/mappings.tiny" />
+      <module name="minefed.Minecraft-Transit-Railway.fabric.main" options="-AoutRefMapFile=$PROJECT_DIR$/fabric/build/classes/java/main/mtr.refmap.json -AdefaultObfuscationEnv=named:intermediary -Aquiet=true -AoutMapFileNamedIntermediary=$PROJECT_DIR$/fabric/build/loom-cache/mixin-map-net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2.main.tiny -AinMapFileNamedIntermediary=$USER_HOME$/.gradle/caches/fabric-loom/1.20.4/net.fabricmc.yarn.1_20_4.1.20.4+build.3-v2/mappings.tiny" />
+    </option>
+  </component>
+</project>
