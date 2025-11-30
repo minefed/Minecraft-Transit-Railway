@@ -114,6 +114,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 			TransportMode transportMode,
 			double length,
 			double width,
+			double maxSpeedKilometersPerHour,
 			double bogie1Position,
 			double bogie2Position,
 			double couplingPadding1,
@@ -165,6 +166,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 				legacyDoorCloseSoundTime,
 				resourceProvider
 		);
+		this.maxSpeedKilometersPerHour = maxSpeedKilometersPerHour;
 		this.tags.addAll(tags);
 		this.models.addAll(models);
 		this.bogie1Models.addAll(bogie1Models);
@@ -260,6 +262,15 @@ public final class VehicleResource extends VehicleResourceSchema {
 		return width;
 	}
 
+	public double getMaxSpeed() {
+		// Convert km/h to m/ms: km/h / 3600000 = m/ms
+		return maxSpeedKilometersPerHour > 0 ? maxSpeedKilometersPerHour / 3600000.0 : -1;
+	}
+
+	public double getMaxSpeedKilometersPerHour() {
+		return maxSpeedKilometersPerHour;
+	}
+
 	public double getBogie1Position() {
 		return bogie1Position;
 	}
@@ -305,6 +316,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 				transportMode,
 				length,
 				width,
+				maxSpeedKilometersPerHour,
 				bogie1Position,
 				bogie2Position,
 				couplingPadding1,
