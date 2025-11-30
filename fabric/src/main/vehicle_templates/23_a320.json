@@ -31,6 +31,7 @@
 			"name": "@name@",
 			"color": "@color@",
 			"transportMode": "AIRPLANE",
+			"maxSpeedKilometersPerHour": 1200,
 			"width": 2,
 			"wikipediaArticle": "Airbus_A320_family",
 			"tags": [

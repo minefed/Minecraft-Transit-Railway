@@ -67,6 +67,7 @@
 			"name": "Ngong Ping 360 @name@",
 			"color": "062540",
 			"transportMode": "CABLE_CAR",
+			"maxSpeedKilometersPerHour": 100,
 			"width": 2,
 			"wikipediaArticle": "Ngong_Ping_360",
 			"tags": [

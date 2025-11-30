@@ -5,7 +5,9 @@
 	"compatibilityLevel": "JAVA_8",
 	"refmap": "mtr.refmap.json",
 	"mixins": [
-		"PlayerTeleportationStateAccessor"
+		"PlayerTeleportationStateAccessor",
+		"PathDataAccessor",
+		"VehicleExtraDataMixin"
 	],
 	"client": [
 		"ClientWorldRenderingMixin",

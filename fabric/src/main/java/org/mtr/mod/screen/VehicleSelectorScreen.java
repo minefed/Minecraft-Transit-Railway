@@ -23,6 +23,7 @@ import org.mtr.mod.client.CustomResourceLoader;
 import org.mtr.mod.client.IDrawing;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.generated.lang.TranslationProvider;
+import org.mtr.mod.data.VehicleSpeedRegistry;
 import org.mtr.mod.packet.PacketUpdateData;
 import org.mtr.mod.resource.VehicleResource;
 
@@ -78,6 +79,13 @@ public class VehicleSelectorScreen extends DashboardListSelectorScreen implement
 			int y = SQUARE_SIZE;
 			y = drawWrappedText(graphicsHolder, vehicleResource.getName(), y, ARGB_WHITE);
 			y = drawWrappedText(graphicsHolder, TranslationProvider.GUI_MTR_VEHICLE_LENGTH.getMutableText(vehicleResource.getLength()), y, ARGB_WHITE);
+			// Display server-configured speed limit
+			final double speedLimitKmh = VehicleSpeedRegistry.getMaxSpeedKilometersPerHour(vehicleResource.getId());
+			if (speedLimitKmh > 0) {
+				y = drawWrappedText(graphicsHolder, TranslationProvider.GUI_MTR_VEHICLE_MAX_SPEED.getMutableText(Math.round(speedLimitKmh)), y, ARGB_WHITE);
+			} else {
+				y = drawWrappedText(graphicsHolder, TranslationProvider.GUI_MTR_VEHICLE_MAX_SPEED_UNLIMITED.getMutableText(), y, ARGB_WHITE);
+			}
 			final String description = vehicleResource.getDescription().getString();
 			if (!description.isEmpty()) {
 				for (final String text : description.split("[|\n]")) {
@@ -100,7 +108,8 @@ public class VehicleSelectorScreen extends DashboardListSelectorScreen implement
 		selectedIds.forEach(selectedId -> allData.stream().filter(data -> data.id == selectedId).findFirst().ifPresent(data -> {
 			if (data instanceof VehicleForList) {
 				final VehicleResource vehicleResource = ((VehicleForList) data).vehicleResource;
-				tempList.add(new VehicleCar(vehicleResource.getId(), vehicleResource.getLength(), vehicleResource.getWidth(), vehicleResource.getBogie1Position(), vehicleResource.getBogie2Position(), vehicleResource.getCouplingPadding1(), vehicleResource.getCouplingPadding2()));
+				final VehicleCar vehicleCar = new VehicleCar(vehicleResource.getId(), vehicleResource.getLength(), vehicleResource.getWidth(), vehicleResource.getBogie1Position(), vehicleResource.getBogie2Position(), vehicleResource.getCouplingPadding1(), vehicleResource.getCouplingPadding2());
+				tempList.add(vehicleCar);
 			}
 		}));
 		siding.setVehicleCars(tempList);

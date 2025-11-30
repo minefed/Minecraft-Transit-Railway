@@ -11,6 +11,8 @@ import java.util.stream.Collectors;
 
 public final class VehicleResourceWrapper extends VehicleResourceWrapperSchema {
 
+	private final double maxSpeedKilometersPerHour;
+
 	VehicleResourceWrapper(
 			String id,
 			String name,
@@ -18,6 +20,7 @@ public final class VehicleResourceWrapper extends VehicleResourceWrapperSchema {
 			TransportMode transportMode,
 			double length,
 			double width,
+			double maxSpeedKilometersPerHour,
 			double bogie1Position,
 			double bogie2Position,
 			double couplingPadding1,
@@ -67,6 +70,7 @@ public final class VehicleResourceWrapper extends VehicleResourceWrapperSchema {
 				legacyDoorSoundBaseResource,
 				legacyDoorCloseSoundTime
 		);
+		this.maxSpeedKilometersPerHour = maxSpeedKilometersPerHour;
 		this.tags.addAll(tags);
 		this.models.addAll(models);
 		this.bogie1Models.addAll(bogie1Models);
@@ -76,6 +80,7 @@ public final class VehicleResourceWrapper extends VehicleResourceWrapperSchema {
 	public VehicleResourceWrapper(ReaderBase readerBase) {
 		super(readerBase);
 		updateData(readerBase);
+		this.maxSpeedKilometersPerHour = readerBase.getDouble("maxSpeedKilometersPerHour", -1);
 	}
 
 	public VehicleResource toVehicleResource(
@@ -90,6 +95,7 @@ public final class VehicleResourceWrapper extends VehicleResourceWrapperSchema {
 				transportMode,
 				length,
 				width,
+				maxSpeedKilometersPerHour,
 				bogie1Position,
 				bogie2Position,
 				couplingPadding1,
