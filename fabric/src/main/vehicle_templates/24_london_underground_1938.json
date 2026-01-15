@@ -96,7 +96,12 @@
 			],
 			"hasGangway1": false,
 			"hasGangway2": false,
-			"bveSoundBaseResource": "london_underground_@year@"
+			"legacySpeedSoundBaseResource": "mlr",
+			"legacySpeedSoundCount": 90,
+		    "legacyUseAccelerationSoundsWhenCoasting": false,
+		    "legacyConstantPlaybackSpeed": false,
+		    "legacyDoorSoundBaseResource": "r179",
+		    "legacyDoorCloseSoundTime": 1
 		}
 	]
 }
