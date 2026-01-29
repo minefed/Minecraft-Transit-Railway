@@ -27,6 +27,7 @@ import java.util.function.Consumer;
 
 public class MainRenderer extends EntityRenderer<EntityRendering> implements IGui {
 
+	private static long timerMillis;
 	private static long lastRenderedMillis;
 
 	public static final WorkerThread WORKER_THREAD = new WorkerThread();
@@ -89,6 +90,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			millisElapsed = 0;
 		} else {
 			millisElapsed = getMillisElapsed();
+			timerMillis += millisElapsed;
+
 			MinecraftClientData.getInstance().blockedRailIds.clear();
 			MinecraftClientData.getInstance().vehicles.forEach(vehicle -> vehicle.simulate(millisElapsed));
 			MinecraftClientData.getInstance().lifts.forEach(lift -> {
@@ -178,6 +181,15 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 		CURRENT_RENDERS.forEach(renderForPriority -> renderForPriority.forEach(renderForPriorityAndQueuedRenderLayer -> renderForPriorityAndQueuedRenderLayer.remove(identifier)));
 	}
 
+	/**
+	 * Get a continuously ticking timer for rendering, suitable for animations.
+	 *
+	 * @return a value in milliseconds representing the time elapsed, incremented when {@link MainRenderer#render(GraphicsHolder, Vector3d)} gets invoked
+	 */
+	public static long getTimerMillis() {
+		return timerMillis;
+	}
+
 	public static String getInterchangeRouteNames(Consumer<BiConsumer<String, InterchangeColorsForStationName>> getInterchanges) {
 		final ObjectArrayList<String> interchangeRouteNames = new ObjectArrayList<>();
 		getInterchanges.accept((connectingStationName, interchangeColorsForStationName) -> interchangeColorsForStationName.forEach((color, interchangeRouteNamesForColor) -> interchangeRouteNamesForColor.forEach(interchangeRouteNames::add)));
@@ -185,12 +197,12 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 	}
 
 	public static int getFlashingLight() {
-		final int light = (int) Math.round(((Math.sin(Math.PI * 2 * (System.currentTimeMillis() % FLASHING_INTERVAL) / FLASHING_INTERVAL) + 1) / 2) * 0xF);
+		final int light = (int) Math.round(((Math.sin(Math.PI * 2 * (getTimerMillis() % FLASHING_INTERVAL) / FLASHING_INTERVAL) + 1) / 2) * 0xF);
 		return LightmapTextureManager.pack(light, light);
 	}
 
 	public static int getFlashingColor(int color, int multiplier) {
-		final double flashingProgress = ((Math.sin(Math.PI * 2 * (System.currentTimeMillis() % FLASHING_INTERVAL) / FLASHING_INTERVAL) + 1) / 2);
+		final double flashingProgress = ((Math.sin(Math.PI * 2 * (getTimerMillis() % FLASHING_INTERVAL) / FLASHING_INTERVAL) + 1) / 2);
 		final Color oldColor = new Color(color);
 		return new Color(
 				(int) (oldColor.getRed() * Math.min(1, flashingProgress * multiplier)),
