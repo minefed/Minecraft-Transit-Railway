@@ -125,7 +125,7 @@ public final class Init implements Utilities {
 			// Generate depot(s) by name
 			commandBuilderMtr.then("generatePath", commandBuilderGenerate -> depotOperationFromCommand(commandBuilderGenerate, DepotOperation.GENERATE));
 			// Clear depot(s) by name
-			commandBuilderMtr.then("clearTrains", commandBuilderClear -> depotOperationFromCommand(commandBuilderClear, DepotOperation.CLEAR));
+			commandBuilderMtr.then("clearVehicles", commandBuilderClear -> depotOperationFromCommand(commandBuilderClear, DepotOperation.CLEAR));
 			// Instant deploy depot(s) by name
 			commandBuilderMtr.then("instantDeploy", commandBuilderInstantDeploy -> depotOperationFromCommand(commandBuilderInstantDeploy, DepotOperation.INSTANT_DEPLOY));
 			// Force copy a world backup from one folder another
@@ -377,7 +377,7 @@ public final class Init implements Utilities {
 	private static void depotOperationFromCommand(CommandBuilder<?> commandBuilder, DepotOperation depotOperation) {
 		commandBuilder.permissionLevel(2);
 
-		commandBuilder.then("allDepot", innerCommandBuilder -> {
+		commandBuilder.then("allDepots", innerCommandBuilder -> {
 			innerCommandBuilder.executes(contextHandler -> {
 				contextHandler.sendSuccess(depotOperation.translationHolderAll.key, true);
 				return depotOperationFromCommand(contextHandler.getWorld(), "", depotOperation);

@@ -182,8 +182,9 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 	}
 
 	/**
-	 * Get a continously ticking timer for rendering, suitable for animations.
-	 * @return A value in millisecond representing the time elapsed, incremented when {@link MainRenderer#render(GraphicsHolder, Vector3d)} gets invoked.
+	 * Get a continuously ticking timer for rendering, suitable for animations.
+	 *
+	 * @return a value in milliseconds representing the time elapsed, incremented when {@link MainRenderer#render(GraphicsHolder, Vector3d)} gets invoked
 	 */
 	public static long getTimerMillis() {
 		return timerMillis;
