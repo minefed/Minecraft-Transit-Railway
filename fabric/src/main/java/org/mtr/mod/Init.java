@@ -124,9 +124,9 @@ public final class Init implements Utilities {
 		// Register command
 		REGISTRY.registerCommand("mtr", commandBuilderMtr -> {
 			// Generate depot(s) by name
-			commandBuilderMtr.then("generate", commandBuilderGenerate -> depotOperationFromCommand(commandBuilderGenerate, DepotOperation.GENERATE));
+			commandBuilderMtr.then("generatePath", commandBuilderGenerate -> depotOperationFromCommand(commandBuilderGenerate, DepotOperation.GENERATE));
 			// Clear depot(s) by name
-			commandBuilderMtr.then("clear", commandBuilderClear -> depotOperationFromCommand(commandBuilderClear, DepotOperation.CLEAR));
+			commandBuilderMtr.then("clearVehicles", commandBuilderClear -> depotOperationFromCommand(commandBuilderClear, DepotOperation.CLEAR));
 			// Instant deploy depot(s) by name
 			commandBuilderMtr.then("instantDeploy", commandBuilderInstantDeploy -> depotOperationFromCommand(commandBuilderInstantDeploy, DepotOperation.INSTANT_DEPLOY));
 			// Force copy a world backup from one folder another
@@ -382,15 +382,21 @@ public final class Init implements Utilities {
 
 	private static void depotOperationFromCommand(CommandBuilder<?> commandBuilder, DepotOperation depotOperation) {
 		commandBuilder.permissionLevel(2);
-		commandBuilder.executes(contextHandler -> {
-			contextHandler.sendSuccess(depotOperation.translationHolderAll.key, true);
-			return depotOperationFromCommand(contextHandler.getWorld(), "", depotOperation);
+
+		commandBuilder.then("allDepots", innerCommandBuilder -> {
+			innerCommandBuilder.executes(contextHandler -> {
+				contextHandler.sendSuccess(depotOperation.translationHolderAll.key, true);
+				return depotOperationFromCommand(contextHandler.getWorld(), "", depotOperation);
+			});
 		});
-		commandBuilder.then("name", StringArgumentType.greedyString(), innerCommandBuilder -> innerCommandBuilder.executes(contextHandler -> {
-			final String filter = contextHandler.getString("name");
-			contextHandler.sendSuccess(depotOperation.translationHolderName.key, true, filter);
-			return depotOperationFromCommand(contextHandler.getWorld(), filter, depotOperation);
-		}));
+
+		commandBuilder.then("depot", innerCommandBuilder -> {
+			innerCommandBuilder.then("name", StringArgumentType.greedyString(), innerCommandBuilder2 -> innerCommandBuilder2.executes(contextHandler -> {
+				final String filter = contextHandler.getString("name");
+				contextHandler.sendSuccess(depotOperation.translationHolderName.key, true, filter);
+				return depotOperationFromCommand(contextHandler.getWorld(), filter, depotOperation);
+			}));
+		});
 	}
 
 	private static int depotOperationFromCommand(World world, String filter, DepotOperation depotOperation) {

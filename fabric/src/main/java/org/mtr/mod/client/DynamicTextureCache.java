@@ -44,9 +44,19 @@ public class DynamicTextureCache implements IGui {
 	private static final Identifier DEFAULT_TRANSPARENT_RESOURCE = new Identifier(Init.MOD_ID, "textures/block/transparent.png");
 	private static final int MAX_IMAGE_SIZE = 2048;
 
+	/**
+	 * Clear all asset-related cache and mark all dynamic textures to be drawn.
+	 */
 	public void reload() {
 		font = null;
 		fontCjk = null;
+		refresh();
+	}
+
+	/**
+	 * Mark all dynamic textures to be redrawn.
+	 */
+	public void refresh() {
 		Init.LOGGER.debug("Refreshing dynamic resources; {} textures in memory; {} textures queued to be destroyed", dynamicResources.size(), deletedResources.size());
 		dynamicResources.values().forEach(dynamicResource -> dynamicResource.needsRefresh = true);
 		generatingResources.clear();
@@ -54,10 +64,11 @@ public class DynamicTextureCache implements IGui {
 
 	public void tick() {
 		final ObjectArrayList<String> keysToRemove = new ObjectArrayList<>();
+		final long currentTimeMillis = System.currentTimeMillis();
 		dynamicResources.forEach((checkKey, checkDynamicResource) -> {
-			if (checkDynamicResource.expiryTime < System.currentTimeMillis()) {
+			if (checkDynamicResource.expiryTime < currentTimeMillis) {
 				checkDynamicResource.remove();
-				deletedResources.put(checkDynamicResource.identifier, System.currentTimeMillis() + COOLDOWN_TIME);
+				deletedResources.put(checkDynamicResource.identifier, currentTimeMillis + COOLDOWN_TIME);
 				keysToRemove.add(checkKey);
 			}
 		});
@@ -65,7 +76,7 @@ public class DynamicTextureCache implements IGui {
 
 		final ObjectArrayList<Identifier> deletedResourcesToRemove = new ObjectArrayList<>();
 		deletedResources.forEach((identifier, expiryTime) -> {
-			if (expiryTime < System.currentTimeMillis()) {
+			if (expiryTime < currentTimeMillis) {
 				MinecraftClient.getInstance().getTextureManager().destroyTexture(identifier);
 				deletedResourcesToRemove.add(identifier);
 			}

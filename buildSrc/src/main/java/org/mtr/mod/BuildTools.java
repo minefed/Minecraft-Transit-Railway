@@ -116,7 +116,7 @@ public class BuildTools {
 			return loader + "-8.17.0";
 		}
 		final String modIdString = "wthit";
-		return new ModId(modIdString, ModProvider.MODRINTH).getModFiles(minecraftVersion, loader.equals("fabric") ? ModLoader.FABRIC : ModLoader.FORGE, "").get(0).fileName.split("\\.jar")[0].replace(modIdString + "-", "");
+		return new ModId(modIdString, ModProvider.MODRINTH).getModFiles(minecraftVersion, loader.equals("fabric") ? ModLoader.FABRIC : ModLoader.FORGE, "").get(0).fileName.split("\\.jar")[0].replace(modIdString + "-", "").replace(minecraftVersion + "-", "");
 	}
 
 	public String getModMenuVersion() {
