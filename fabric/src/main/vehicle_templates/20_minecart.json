@@ -13,6 +13,7 @@
 			"name": "Minecart",
 			"color": "666666",
 			"transportMode": "TRAIN",
+			"maxSpeedKilometersPerHour": 100,
 			"width": 1,
 			"couplingPadding1": 0,
 			"couplingPadding2": 0,

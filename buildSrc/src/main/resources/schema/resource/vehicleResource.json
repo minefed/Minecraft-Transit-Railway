@@ -118,6 +118,10 @@
 		},
 		"legacyDoorCloseSoundTime": {
 			"type": "number"
+		},
+		"maxSpeedKilometersPerHour": {
+			"type": "number",
+			"minimum": -1
 		}
 	},
 	"required": [

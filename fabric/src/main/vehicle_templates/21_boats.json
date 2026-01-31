@@ -245,6 +245,7 @@
 			"name": "@name@",
 			"color": "@color@",
 			"transportMode": "BOAT",
+			"maxSpeedKilometersPerHour": 100,
 			"width": 2,
 			"wikipediaArticle": "Boat",
 			"tags": [

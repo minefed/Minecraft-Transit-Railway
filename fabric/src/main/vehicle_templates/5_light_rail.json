@@ -331,6 +331,7 @@
 			"name": "Light Rail (Phase @name@)",
 			"color": "D2A825",
 			"transportMode": "TRAIN",
+			"maxSpeedKilometersPerHour": 60,
 			"width": 2,
 			"couplingPadding1": 0,
 			"couplingPadding2": 0,

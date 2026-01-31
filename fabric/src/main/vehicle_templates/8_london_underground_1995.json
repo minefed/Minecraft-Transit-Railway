@@ -151,6 +151,7 @@
 			"name": "London Underground @name@",
 			"color": "@color@",
 			"transportMode": "TRAIN",
+			"maxSpeedKilometersPerHour": 100,
 			"width": 2,
 			"couplingPadding1": 0,
 			"couplingPadding2": 0,
