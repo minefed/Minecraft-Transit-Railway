@@ -5,15 +5,20 @@ import org.mtr.core.data.Vehicle;
 import org.mtr.core.data.VehicleCar;
 import org.mtr.core.data.VehicleExtraData;
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectImmutableList;
+import org.mtr.mapping.holder.MinecraftClient;
+import org.mtr.mapping.holder.SoundInstance;
+import org.mtr.mapping.holder.SoundManager;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mod.client.Oscillation;
 import org.mtr.mod.client.ScrollingText;
 import org.mtr.mod.resource.DoorAnimationType;
 import org.mtr.mod.resource.Interpolation;
 import org.mtr.mod.resource.VehicleResource;
+import org.mtr.mod.sound.TrainAnnouncementSoundInstance;
 import org.mtr.mod.sound.VehicleSoundBase;
 
 import java.util.function.Supplier;
@@ -27,6 +32,7 @@ public final class PersistentVehicleData {
 	private double nextAnnouncementRailProgress;
 	private int doorCooldown;
 	private int overrideDoorMultiplier;
+	private boolean wasOnRoute;
 
 	public final boolean[] rayTracing;
 	public final double[] longestDimensions;
@@ -35,6 +41,8 @@ public final class PersistentVehicleData {
 	private final ObjectArrayList<ObjectArrayList<ScrollingText>> scrollingTexts = new ObjectArrayList<>();
 	private final ObjectArrayList<Oscillation> oscillations = new ObjectArrayList<>();
 	private final Object2ObjectOpenHashMap<String, DoorMovementInterpolation> doorMovementInterpolations = new Object2ObjectOpenHashMap<>();
+	private final LongAVLTreeSet announcedTrainAnnouncers = new LongAVLTreeSet();
+	private final ObjectArrayList<TrainAnnouncementSoundInstance> announcementSounds = new ObjectArrayList<>();
 
 	public PersistentVehicleData(ObjectImmutableList<VehicleCar> immutableVehicleCars, TransportMode transportMode) {
 		rayTracing = new boolean[immutableVehicleCars.size()];
@@ -144,6 +152,45 @@ public final class PersistentVehicleData {
 		getVehicleSoundBase(vehicleResource, carNumber).playDoorSound(vehiclePosition, doorValue, oldDoorValue);
 	}
 
+	public void updateAnnouncerTripState(boolean isOnRoute) {
+		if (wasOnRoute && !isOnRoute) {
+			announcedTrainAnnouncers.clear();
+		}
+		wasOnRoute = isOnRoute;
+	}
+
+	public boolean canTriggerAnnouncer(long announcerPosLong, boolean isOnRoute) {
+		if (!isOnRoute) {
+			return true;
+		}
+		if (announcedTrainAnnouncers.contains(announcerPosLong)) {
+			return false;
+		}
+		announcedTrainAnnouncers.add(announcerPosLong);
+		return true;
+	}
+
+	public void startAnnouncementSound(String soundId) {
+		if (soundId.isEmpty()) {
+			return;
+		}
+		final TrainAnnouncementSoundInstance instance = new TrainAnnouncementSoundInstance(soundId);
+		announcementSounds.add(instance);
+		MinecraftClient.getInstance().getSoundManager().play(new SoundInstance(instance));
+	}
+
+	public void tickAnnouncementSounds(BlockPos blockPos, boolean isRiding) {
+		final SoundManager soundManager = MinecraftClient.getInstance().getSoundManager();
+		for (int i = announcementSounds.size() - 1; i >= 0; i--) {
+			final TrainAnnouncementSoundInstance instance = announcementSounds.get(i);
+			if (soundManager.isPlaying(new SoundInstance(instance))) {
+				instance.update(blockPos, isRiding);
+			} else {
+				announcementSounds.remove(i);
+			}
+		}
+	}
+
 	private VehicleSoundBase getVehicleSoundBase(VehicleResource vehicleResource, int carNumber) {
 		return getElement(vehicleSoundBaseList, carNumber, vehicleResource.createVehicleSoundBase);
 	}
@@ -152,6 +199,9 @@ public final class PersistentVehicleData {
 		for (VehicleSoundBase sounds : vehicleSoundBaseList) {
 			sounds.dispose();
 		}
+		final SoundManager soundManager = MinecraftClient.getInstance().getSoundManager();
+		announcementSounds.forEach(instance -> soundManager.stop(new SoundInstance(instance)));
+		announcementSounds.clear();
 	}
 
 	private static <T> T getElement(ObjectArrayList<T> list, int index, Supplier<T> supplier) {

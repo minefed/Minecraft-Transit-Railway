@@ -73,6 +73,9 @@ public class VehicleExtension extends Vehicle implements Utilities {
 			return;
 		}
 
+		final boolean isOnRoute = getIsOnRoute();
+		persistentVehicleData.updateAnnouncerTripState(isOnRoute);
+
 		final int thisRouteColor = vehicleExtraData.getThisRouteColor();
 		final String thisRouteName = formatRouteName(vehicleExtraData.getThisRouteName());
 		final int nextRouteColor = vehicleExtraData.getNextRouteColor();
@@ -207,6 +210,9 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 		// Check for sensors
 		final Vector headPosition = getHeadPosition();
+		final BlockPos headBlockPos = Init.newBlockPos(headPosition.x, headPosition.y, headPosition.z);
+		final boolean isRiding = VehicleRidingMovement.isRiding(id);
+		persistentVehicleData.tickAnnouncementSounds(isRiding ? clientPlayerEntity.getBlockPos() : headBlockPos, isRiding);
 		for (int xOffset = -1; xOffset <= 1; xOffset++) {
 			for (int yOffset = -1; yOffset <= 1; yOffset++) {
 				for (int zOffset = -1; zOffset <= 1; zOffset++) {
@@ -216,10 +222,12 @@ public class VehicleExtension extends Vehicle implements Utilities {
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
 						if (block.data instanceof BlockTrainRedstoneSensor && IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED) < 2) {
 							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
-						} else if (block.data instanceof BlockTrainAnnouncer && VehicleRidingMovement.isRiding(id)) {
+						} else if (block.data instanceof BlockTrainAnnouncer) {
 							final BlockEntity blockEntity = clientWorld.getBlockEntity(offsetBlockPos);
 							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity) {
-								((BlockTrainAnnouncer.BlockEntity) blockEntity.data).announce();
+								if (persistentVehicleData.canTriggerAnnouncer(offsetBlockPos.asLong(), isOnRoute)) {
+									((BlockTrainAnnouncer.BlockEntity) blockEntity.data).announce(id);
+								}
 							}
 						}
 					}

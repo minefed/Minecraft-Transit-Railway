@@ -7,10 +7,12 @@ import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.BlockEntityExtension;
-import org.mtr.mapping.mapper.SoundHelper;
 import org.mtr.mapping.mapper.TextHelper;
 import org.mtr.mod.BlockEntityTypes;
+import org.mtr.mod.client.MinecraftClientData;
+import org.mtr.mod.client.VehicleRidingMovement;
 import org.mtr.mod.client.IDrawing;
+import org.mtr.mod.data.PersistentVehicleData;
 
 import javax.annotation.Nonnull;
 import java.util.Arrays;
@@ -88,23 +90,29 @@ public class BlockTrainAnnouncer extends BlockTrainSensorBase {
 			return delay;
 		}
 
-		public void announce() {
+		public void announce(long vehicleId) {
 			final long currentMillis = System.currentTimeMillis();
 			if (currentMillis - lastAnnouncedMillis >= ANNOUNCE_COOLDOWN_MILLIS) {
 				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
 				QUEUE.put(currentMillis + (long) delay * MILLIS_PER_SECOND, tasks);
 				if (!message.isEmpty()) {
-					tasks.add(() -> IDrawing.narrateOrAnnounce(Utilities.formatName(message), Arrays.stream(message.split("\\|")).map(TextHelper::literal).collect(Collectors.toCollection(ObjectArrayList::new))));
-				}
-				if (!soundId.isEmpty()) {
 					tasks.add(() -> {
-						final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
-						if (clientPlayerEntity != null) {
-							clientPlayerEntity.playSound(SoundHelper.createSoundEvent(new Identifier(soundId)), 1000, 1);
+						if (VehicleRidingMovement.isRiding(vehicleId)) {
+							IDrawing.narrateOrAnnounce(Utilities.formatName(message), Arrays.stream(message.split("\\|")).map(TextHelper::literal).collect(Collectors.toCollection(ObjectArrayList::new)));
 						}
 					});
 				}
+				if (!soundId.isEmpty()) {
+					tasks.add(() -> startAnnouncementSound(vehicleId, soundId));
+				}
 				lastAnnouncedMillis = currentMillis;
+			}
+		}
+
+		private static void startAnnouncementSound(long vehicleId, String soundId) {
+			final PersistentVehicleData persistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(vehicleId);
+			if (persistentVehicleData != null) {
+				persistentVehicleData.startAnnouncementSound(soundId);
 			}
 		}
 	}
