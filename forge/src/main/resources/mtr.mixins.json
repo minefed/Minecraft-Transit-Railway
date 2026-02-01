@@ -7,7 +7,9 @@
 	"mixins": [
 		"PlayerTeleportationStateAccessor",
 		"PathDataAccessor",
-		"VehicleExtraDataMixin"
+		"VehicleExtraDataMixin",
+		"SidingSpeedLimitMixin",
+		"VehicleSpeedLimitMixin"
 	],
 	"client": [
 		"ClientWorldRenderingMixin",

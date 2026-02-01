@@ -1,5 +1,6 @@
 package org.mtr.mod.data;
 
+import org.mtr.core.data.VehicleCar;
 import org.mtr.libraries.com.google.gson.GsonBuilder;
 import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.com.google.gson.JsonElement;
@@ -185,7 +186,7 @@ public class VehicleSpeedRegistry {
 
 				if (speedKmh > 0) {
 					// Convert km/h to m/ms
-					double speedMms = speedKmh / 3600000.0;
+					double speedMms = speedKmh / 3600.0;
 					VEHICLE_SPEEDS.put(vehicleId, speedMms);
 					Init.LOGGER.debug("[MTR-SpeedLimit] Registered {} = {} km/h ({} m/ms)", vehicleId, speedKmh, speedMms);
 				}
@@ -261,7 +262,7 @@ public class VehicleSpeedRegistry {
 	 */
 	public static void registerVehicleSpeed(String vehicleId, double maxSpeedKmh) {
 		if (maxSpeedKmh > 0) {
-			VEHICLE_SPEEDS.put(vehicleId, maxSpeedKmh / 3600000.0);
+			VEHICLE_SPEEDS.put(vehicleId, maxSpeedKmh / 3600.0);
 		}
 	}
 
@@ -286,9 +287,37 @@ public class VehicleSpeedRegistry {
 	public static double getMaxSpeedKilometersPerHour(String vehicleId) {
 		double speedMms = getMaxSpeed(vehicleId);
 		if (speedMms > 0) {
-			return speedMms * 3600000.0;
+			return speedMms * 3600.0;
 		}
 		return -1;
+	}
+
+	/**
+	 * Get the max speed in m/ms for a train composed of vehicle cars.
+	 * Uses the minimum positive max speed across all cars.
+	 *
+	 * @param vehicleCars Iterable of VehicleCar
+	 * @return max speed in m/ms, or -1 if no limits are defined
+	 */
+	public static double getMaxSpeedFromVehicleCars(Iterable<VehicleCar> vehicleCars) {
+		if (vehicleCars == null) {
+			return -1;
+		}
+
+		double minSpeed = Double.POSITIVE_INFINITY;
+		boolean found = false;
+		for (VehicleCar vehicleCar : vehicleCars) {
+			if (vehicleCar == null) {
+				continue;
+			}
+			final double speed = getMaxSpeed(vehicleCar.getVehicleId());
+			if (speed > 0) {
+				minSpeed = Math.min(minSpeed, speed);
+				found = true;
+			}
+		}
+
+		return found ? minSpeed : -1;
 	}
 
 	/**
@@ -300,7 +329,7 @@ public class VehicleSpeedRegistry {
 	public static JsonObject getSpeedsAsJson() {
 		JsonObject vehicles = new JsonObject();
 		VEHICLE_SPEEDS.object2DoubleEntrySet().forEach(entry -> {
-			vehicles.addProperty(entry.getKey(), entry.getDoubleValue() * 3600000.0);
+			vehicles.addProperty(entry.getKey(), entry.getDoubleValue() * 3600.0);
 		});
 		return vehicles;
 	}
@@ -317,7 +346,7 @@ public class VehicleSpeedRegistry {
 			String vehicleId = entry.getKey();
 			double speedKmh = entry.getValue().getAsDouble();
 			if (speedKmh > 0) {
-				VEHICLE_SPEEDS.put(vehicleId, speedKmh / 3600000.0);
+				VEHICLE_SPEEDS.put(vehicleId, speedKmh / 3600.0);
 			}
 		}
 		Init.LOGGER.info("[MTR-SpeedLimit] Client received {} vehicle speeds from server", VEHICLE_SPEEDS.size());
