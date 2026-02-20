@@ -15,6 +15,7 @@ import org.mtr.core.servlet.Webserver;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.com.google.gson.JsonElement;
 import org.mtr.libraries.com.google.gson.JsonParser;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -70,6 +71,7 @@ public final class Init implements Utilities {
 	private static final int MILLIS_PER_MC_DAY = SECONDS_PER_MC_HOUR * MILLIS_PER_SECOND * HOURS_PER_DAY;
 	private static final Object2ObjectArrayMap<ServerWorld, RailActionModule> RAIL_ACTION_MODULES = new Object2ObjectArrayMap<>();
 	private static final ObjectArrayList<String> WORLD_ID_LIST = new ObjectArrayList<>();
+	private static final Object2IntOpenHashMap<String> WORLD_ID_TO_INDEX = new Object2IntOpenHashMap<>();
 	private static final Object2ObjectAVLTreeMap<UUID, Runnable> RIDING_PLAYERS = new Object2ObjectAVLTreeMap<>();
 
 	public static void init() {
@@ -172,12 +174,15 @@ public final class Init implements Utilities {
 		// Register events
 		REGISTRY.eventRegistry.registerServerStarted(minecraftServer -> {
 			// Start up the backend
-			RAIL_ACTION_MODULES.clear();
-			WORLD_ID_LIST.clear();
-			MinecraftServerHelper.iterateWorlds(minecraftServer, serverWorld -> {
-				RAIL_ACTION_MODULES.put(serverWorld, new RailActionModule(serverWorld));
-				WORLD_ID_LIST.add(getWorldId(new World(serverWorld.data)));
-			});
+				RAIL_ACTION_MODULES.clear();
+				WORLD_ID_LIST.clear();
+				WORLD_ID_TO_INDEX.clear();
+				MinecraftServerHelper.iterateWorlds(minecraftServer, serverWorld -> {
+					RAIL_ACTION_MODULES.put(serverWorld, new RailActionModule(serverWorld));
+					final String worldId = getWorldId(new World(serverWorld.data));
+					WORLD_ID_TO_INDEX.put(worldId, WORLD_ID_LIST.size());
+					WORLD_ID_LIST.add(worldId);
+				});
 
 			Config.init(minecraftServer.getRunDirectory());
 			org.mtr.mod.data.VehicleSpeedRegistry.init(minecraftServer.getRunDirectory());
@@ -257,11 +262,11 @@ public final class Init implements Utilities {
 				railActionModule.tick();
 			}
 
-			if (main != null) {
-				final String dimension = getWorldId(new World(serverWorld.data));
-				main.processMessagesS2C(WORLD_ID_LIST.indexOf(dimension), queueObject -> MinecraftOperationProcessor.process(queueObject, serverWorld, dimension));
-			}
-		});
+				if (main != null) {
+					final String dimension = getWorldId(new World(serverWorld.data));
+					main.processMessagesS2C(WORLD_ID_TO_INDEX.getOrDefault(dimension, -1), queueObject -> MinecraftOperationProcessor.process(queueObject, serverWorld, dimension));
+				}
+			});
 
 		REGISTRY.eventRegistry.registerPlayerJoin((minecraftServer, serverPlayerEntity) -> {
 			updatePlayer(serverPlayerEntity, false);
@@ -292,7 +297,7 @@ public final class Init implements Utilities {
 
 	public static <T extends SerializedDataBase> void sendMessageC2S(String key, @Nullable MinecraftServer minecraftServer, @Nullable World world, SerializedDataBase data, @Nullable Consumer<T> consumer, @Nullable Class<T> responseDataClass) {
 		if (main != null) {
-			main.sendMessageC2S(world == null ? null : WORLD_ID_LIST.indexOf(getWorldId(world)), new QueueObject(key, data, consumer == null || minecraftServer == null ? null : responseData -> minecraftServer.execute(() -> consumer.accept(responseData)), responseDataClass));
+			main.sendMessageC2S(world == null ? null : WORLD_ID_TO_INDEX.getOrDefault(getWorldId(world), -1), new QueueObject(key, data, consumer == null || minecraftServer == null ? null : responseData -> minecraftServer.execute(() -> consumer.accept(responseData)), responseDataClass));
 		}
 	}
 

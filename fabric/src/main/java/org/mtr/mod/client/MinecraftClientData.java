@@ -17,6 +17,7 @@ import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.screen.DashboardListItem;
 
 import javax.annotation.Nullable;
+import java.lang.reflect.Field;
 import java.util.Map;
 import java.util.function.Function;
 import java.util.stream.Collectors;
@@ -32,11 +33,17 @@ public final class MinecraftClientData extends ClientData {
 	public final Object2ObjectAVLTreeMap<String, LongArrayList> railIdToCurrentlyBlockedSignalColors = new Object2ObjectAVLTreeMap<>();
 	public final ObjectArraySet<String> blockedRailIds = new ObjectArraySet<>();
 	public final ObjectArrayList<DashboardListItem> railActions = new ObjectArrayList<>();
+	private final Long2ObjectOpenHashMap<ObjectArrayList<Station>> stationChunkIndex = new Long2ObjectOpenHashMap<>();
+	private final Long2ObjectOpenHashMap<ObjectArrayList<Platform>> platformChunkIndex = new Long2ObjectOpenHashMap<>();
 
 	private final LongAVLTreeSet routeIdsWithDisabledAnnouncements = new LongAVLTreeSet();
 
 	private static MinecraftClientData instance = new MinecraftClientData();
 	private static MinecraftClientData dashboardInstance = new MinecraftClientData();
+	@Nullable
+	private static final Field SAVED_RAIL_POSITION_1_FIELD = getSavedRailPositionField("position1");
+	@Nullable
+	private static final Field SAVED_RAIL_POSITION_2_FIELD = getSavedRailPositionField("position2");
 
 	public static String DASHBOARD_SEARCH = "";
 	public static String ROUTES_PLATFORMS_SEARCH = "";
@@ -69,14 +76,15 @@ public final class MinecraftClientData extends ClientData {
 			final String hexId = rail.getHexId();
 			final RailWrapper railWrapper = railWrapperList.get(hexId);
 			if (railWrapper == null) {
-				railWrapperList.put(hexId, new RailWrapper(rail, hexId));
-			} else {
-				railWrapper.rail = rail;
-			}
-		}));
+			railWrapperList.put(hexId, new RailWrapper(rail, hexId));
+				} else {
+					railWrapper.rail = rail;
+				}
+			}));
 
-		simplifiedRoutes.forEach(simplifiedRoute -> simplifiedRouteIdMap.put(simplifiedRoute.getId(), simplifiedRoute));
-	}
+			simplifiedRoutes.forEach(simplifiedRoute -> simplifiedRouteIdMap.put(simplifiedRoute.getId(), simplifiedRoute));
+			rebuildSpatialIndex();
+		}
 
 	@Nullable
 	public ObjectObjectImmutablePair<Rail, BlockPos> getFacingRailAndBlockPos(boolean includeCableType) {
@@ -163,6 +171,30 @@ public final class MinecraftClientData extends ClientData {
 		return gameMode == GameMode.getCreativeMapped() || gameMode == GameMode.getSurvivalMapped();
 	}
 
+	public ObjectArrayList<Station> getNearbyStations(BlockPos blockPos) {
+		final ObjectArrayList<Station> stationsNear = stationChunkIndex.get(getChunkKey(blockPos.getX() >> 4, blockPos.getZ() >> 4));
+		return stationsNear == null ? new ObjectArrayList<>() : stationsNear;
+	}
+
+	public ObjectArrayList<Platform> getNearbyPlatforms(BlockPos blockPos, int radius) {
+		final int minChunkX = (blockPos.getX() - radius) >> 4;
+		final int maxChunkX = (blockPos.getX() + radius) >> 4;
+		final int minChunkZ = (blockPos.getZ() - radius) >> 4;
+		final int maxChunkZ = (blockPos.getZ() + radius) >> 4;
+		final ObjectOpenHashSet<Platform> nearbyPlatforms = new ObjectOpenHashSet<>();
+
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+				final ObjectArrayList<Platform> platformsInChunk = platformChunkIndex.get(getChunkKey(chunkX, chunkZ));
+				if (platformsInChunk != null) {
+					nearbyPlatforms.addAll(platformsInChunk);
+				}
+			}
+		}
+
+		return new ObjectArrayList<>(nearbyPlatforms);
+	}
+
 	@Nullable
 	public static Lift getLift(long liftId) {
 		// Don't use liftIdMap
@@ -211,6 +243,74 @@ public final class MinecraftClientData extends ClientData {
 			}
 		});
 		idsToRemove.forEach(map::remove);
+	}
+
+	private void rebuildSpatialIndex() {
+		stationChunkIndex.clear();
+		platformChunkIndex.clear();
+
+		stations.forEach(station -> addAreaToStationIndex(station));
+		platforms.forEach(this::addPlatformToIndex);
+	}
+
+	private void addAreaToStationIndex(Station station) {
+		final int minChunkX = (int) station.getMinX() >> 4;
+		final int maxChunkX = (int) station.getMaxX() >> 4;
+		final int minChunkZ = (int) station.getMinZ() >> 4;
+		final int maxChunkZ = (int) station.getMaxZ() >> 4;
+
+		for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+			for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+				Data.put(stationChunkIndex, getChunkKey(chunkX, chunkZ), station, ObjectArrayList::new);
+			}
+		}
+	}
+
+	private void addPlatformToIndex(Platform platform) {
+		final Position position1 = getSavedRailPosition(platform, SAVED_RAIL_POSITION_1_FIELD);
+		final Position position2 = getSavedRailPosition(platform, SAVED_RAIL_POSITION_2_FIELD);
+		if (position1 != null && position2 != null) {
+			final int minChunkX = (int) Math.min(position1.getX(), position2.getX()) >> 4;
+			final int maxChunkX = (int) Math.max(position1.getX(), position2.getX()) >> 4;
+			final int minChunkZ = (int) Math.min(position1.getZ(), position2.getZ()) >> 4;
+			final int maxChunkZ = (int) Math.max(position1.getZ(), position2.getZ()) >> 4;
+
+			for (int chunkX = minChunkX; chunkX <= maxChunkX; chunkX++) {
+				for (int chunkZ = minChunkZ; chunkZ <= maxChunkZ; chunkZ++) {
+					Data.put(platformChunkIndex, getChunkKey(chunkX, chunkZ), platform, ObjectArrayList::new);
+				}
+			}
+		} else {
+			final Position position = platform.getMidPosition();
+			Data.put(platformChunkIndex, getChunkKey((int) position.getX() >> 4, (int) position.getZ() >> 4), platform, ObjectArrayList::new);
+		}
+	}
+
+	@Nullable
+	private static Position getSavedRailPosition(Platform platform, @Nullable Field field) {
+		if (field == null) {
+			return null;
+		}
+		try {
+			return (Position) field.get(platform);
+		} catch (Exception ignored) {
+			return null;
+		}
+	}
+
+	@Nullable
+	private static Field getSavedRailPositionField(String name) {
+		try {
+			final Field field = Class.forName("org.mtr.core.generated.data.SavedRailBaseSchema").getDeclaredField(name);
+			field.setAccessible(true);
+			return field;
+		} catch (Exception ignored) {
+			return null;
+		}
+	}
+
+	private static long getChunkKey(int chunkX, int chunkZ) {
+		return (((long) chunkX) << 32) | (chunkZ & 0xFFFFFFFFL);
 	}
 
 	public static class LiftWrapper {

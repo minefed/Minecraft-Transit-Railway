@@ -8,6 +8,7 @@ import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongCollection;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mapping.holder.Direction;
 import org.mtr.mapping.holder.Vector3d;
@@ -35,6 +36,8 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 	public static final int SWITCH_LANGUAGE_TICKS = 60;
 	private static final int STATIONS_PER_PAGE = 10;
 	private static final int SWITCH_PAGE_TICKS = 120;
+	private static final int MAX_SPLIT_CACHE_SIZE = 4096;
+	private static final Object2ObjectOpenHashMap<String, String[]> PIPE_SPLIT_CACHE = new Object2ObjectOpenHashMap<>();
 
 	public RenderPIDS(Argument dispatcher, float startX, float startY, float startZ, float maxHeight, int maxWidth, boolean rotate90, float textPadding) {
 		super(dispatcher);
@@ -111,9 +114,9 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		for (int i = 0; i < entity.maxArrivals; i++) {
 			final int languageTicks = (int) Math.floor(InitClient.getGameTick()) / SWITCH_LANGUAGE_TICKS;
 			final ArrivalResponse arrivalResponse;
-			final String customMessage = entity.getMessage(i);
-			final String[] destinationSplit;
-			final String[] customMessageSplit = customMessage.split("\\|");
+				final String customMessage = entity.getMessage(i);
+				final String[] destinationSplit;
+				final String[] customMessageSplit = splitByPipe(customMessage);
 			final boolean renderCustomMessage;
 			final int languageIndex;
 
@@ -134,12 +137,12 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 					destinationSplit = new String[0];
 					renderCustomMessage = true;
 					languageIndex = languageTicks % customMessageSplit.length;
-				} else {
-					final String[] tempDestinationSplit = arrivalResponse.getDestination().split("\\|");
-					if (arrivalResponse.getRouteNumber().isEmpty()) {
-						destinationSplit = tempDestinationSplit;
 					} else {
-						final String[] tempNumberSplit = arrivalResponse.getRouteNumber().split("\\|");
+						final String[] tempDestinationSplit = splitByPipe(arrivalResponse.getDestination());
+						if (arrivalResponse.getRouteNumber().isEmpty()) {
+							destinationSplit = tempDestinationSplit;
+						} else {
+							final String[] tempNumberSplit = splitByPipe(arrivalResponse.getRouteNumber());
 						int destinationIndex = 0;
 						int numberIndex = 0;
 						final ObjectArrayList<String> newDestinations = new ObjectArrayList<>();
@@ -221,13 +224,13 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 							final int callingAtPage = callingAtMaxPages == 1 ? 0 : (int) Math.floor(InitClient.getGameTick() / SWITCH_PAGE_TICKS) % callingAtMaxPages;
 							lines.add((isCjk ? TranslationProvider.GUI_MTR_CALLING_AT_CJK : TranslationProvider.GUI_MTR_CALLING_AT).getString(callingAtPage + 1, callingAtMaxPages));
 							for (int j = 0; j < STATIONS_PER_PAGE; j++) {
-								final SimplifiedRoutePlatform simplifiedRoutePlatform = Utilities.getElement(stations, j + callingAtPage * STATIONS_PER_PAGE);
-								if (simplifiedRoutePlatform != null) {
-									final String[] stationNameSplit = simplifiedRoutePlatform.getStationName().split("\\|");
-									lines.add(stationNameSplit[languageTicks % stationNameSplit.length]);
+									final SimplifiedRoutePlatform simplifiedRoutePlatform = Utilities.getElement(stations, j + callingAtPage * STATIONS_PER_PAGE);
+									if (simplifiedRoutePlatform != null) {
+										final String[] stationNameSplit = splitByPipe(simplifiedRoutePlatform.getStationName());
+										lines.add(stationNameSplit[languageTicks % stationNameSplit.length]);
+									}
 								}
 							}
-						}
 
 						lines.forEach(line -> {
 							renderText(graphicsHolder, line, color, maxWidth * scale / 16, stations.isEmpty() ? HorizontalAlignment.CENTER : HorizontalAlignment.LEFT);
@@ -317,5 +320,19 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 
 		lines.add(tempText);
 		return lines;
+	}
+
+	private static String[] splitByPipe(String text) {
+		final String[] cached = PIPE_SPLIT_CACHE.get(text);
+		if (cached != null) {
+			return cached;
+		}
+
+		if (PIPE_SPLIT_CACHE.size() > MAX_SPLIT_CACHE_SIZE) {
+			PIPE_SPLIT_CACHE.clear();
+		}
+		final String[] split = text.split("\\|");
+		PIPE_SPLIT_CACHE.put(text, split);
+		return split;
 	}
 }

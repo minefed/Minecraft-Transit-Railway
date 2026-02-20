@@ -1,10 +1,12 @@
 package org.mtr.mod.render;
 
 import org.mtr.core.data.Position;
+import org.mtr.core.data.Rail;
 import org.mtr.core.data.TwoPositionsBase;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -12,6 +14,7 @@ import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.BlockEntityRenderer;
 import org.mtr.mapping.mapper.GraphicsHolder;
 import org.mtr.mod.Init;
+import org.mtr.mod.InitClient;
 import org.mtr.mod.block.BlockNode;
 import org.mtr.mod.block.BlockSignalBase;
 import org.mtr.mod.block.IBlock;
@@ -26,6 +29,14 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 
 	protected final int aspects;
 	private final float colorIndicatorHeight;
+	private static final ObjectArrayList<Long2ObjectOpenHashMap<BlockPos>> NODE_POS_CACHE = new ObjectArrayList<>();
+	private static long nodePosCacheClearTick = Long.MIN_VALUE;
+
+	static {
+		for (int i = 0; i < 4; i++) {
+			NODE_POS_CACHE.add(new Long2ObjectOpenHashMap<>());
+		}
+	}
 
 	public RenderSignalBase(Argument dispatcher, int colorIndicatorHeight, int aspects) {
 		super(dispatcher);
@@ -110,6 +121,7 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 
 	@Nullable
 	public static AspectState getAspectState(BlockPos blockPos, float angle) {
+		clearNodeCacheIfExpired();
 		final ClientWorld clientWorld = MinecraftClient.getInstance().getWorldMapped();
 		if (clientWorld == null) {
 			return null;
@@ -127,11 +139,19 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 		final ObjectArrayList<String> railIds = new ObjectArrayList<>();
 		final Position startPosition = Init.blockPosToPosition(startPos);
 
-		minecraftClientData.positionsToRail.getOrDefault(startPosition, new Object2ObjectOpenHashMap<>()).forEach((endPosition, rail) -> {
+		final Object2ObjectOpenHashMap<Position, Rail> connectedRails = minecraftClientData.positionsToRail.get(startPosition);
+		if (connectedRails == null) {
+			return new AspectState(detectedColors, occupiedColors, false, railIds);
+		}
+
+		connectedRails.forEach((endPosition, rail) -> {
 			if (Math.abs(Utilities.circularDifference(Math.round(Math.toDegrees(Math.atan2(endPosition.getZ() - startPos.getZ(), endPosition.getX() - startPos.getX()))), Math.round(angle), 360)) < 90) {
 				rail.getSignalColors().forEach(detectedColors::add);
 				final String railId = rail.getHexId();
-				minecraftClientData.railIdToCurrentlyBlockedSignalColors.getOrDefault(railId, new LongArrayList()).forEach(color -> occupiedColors.add((int) color));
+				final LongArrayList blockedSignalColors = minecraftClientData.railIdToCurrentlyBlockedSignalColors.get(railId);
+				if (blockedSignalColors != null) {
+					blockedSignalColors.forEach(color -> occupiedColors.add((int) color));
+				}
 				if (minecraftClientData.blockedRailIds.contains(TwoPositionsBase.getHexIdRaw(startPosition, endPosition))) {
 					blocked[0] = true;
 				}
@@ -145,6 +165,13 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 
 	@Nullable
 	private static BlockPos getNodePos(ClientWorld world, BlockPos pos, Direction facing) {
+		final int facingIndex = Math.round(facing.asRotation() / 90F) & 0b11;
+		final long posKey = pos.asLong();
+		final Long2ObjectOpenHashMap<BlockPos> nodePosCacheForFacing = NODE_POS_CACHE.get(facingIndex);
+		if (nodePosCacheForFacing.containsKey(posKey)) {
+			return nodePosCacheForFacing.get(posKey);
+		}
+
 		int closestDistance = Integer.MAX_VALUE;
 		BlockPos closestPos = null;
 		for (int z = -4; z <= 4; z++) {
@@ -160,7 +187,16 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 				}
 			}
 		}
+		nodePosCacheForFacing.put(posKey, closestPos);
 		return closestPos;
+	}
+
+	private static void clearNodeCacheIfExpired() {
+		final long gameTick = (long) Math.floor(InitClient.getGameTick());
+		if (gameTick > nodePosCacheClearTick) {
+			NODE_POS_CACHE.forEach(Long2ObjectOpenHashMap::clear);
+			nodePosCacheClearTick = gameTick + 20;
+		}
 	}
 
 	public static class AspectState {

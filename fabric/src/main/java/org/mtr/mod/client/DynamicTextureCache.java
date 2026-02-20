@@ -1,6 +1,7 @@
 package org.mtr.mod.client;
 
 import org.mtr.core.servlet.MessageQueue;
+import org.mtr.libraries.it.unimi.dsi.fastutil.ints.Int2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2LongArrayMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectLinkedOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -29,11 +30,13 @@ public class DynamicTextureCache implements IGui {
 
 	private Font font;
 	private Font fontCjk;
+	private Font[] systemFonts;
 
 	private final Object2ObjectLinkedOpenHashMap<String, DynamicResource> dynamicResources = new Object2ObjectLinkedOpenHashMap<>();
 	private final ObjectOpenHashSet<String> generatingResources = new ObjectOpenHashSet<>();
 	private final MessageQueue<Runnable> resourceRegistryQueue = new MessageQueue<>();
 	private final Object2LongArrayMap<Identifier> deletedResources = new Object2LongArrayMap<>();
+	private final Int2ObjectOpenHashMap<Font> fallbackFonts = new Int2ObjectOpenHashMap<>();
 
 	public static DynamicTextureCache instance = new DynamicTextureCache();
 
@@ -50,6 +53,8 @@ public class DynamicTextureCache implements IGui {
 	public void reload() {
 		font = null;
 		fontCjk = null;
+		systemFonts = null;
+		fallbackFonts.clear();
 		refresh();
 	}
 
@@ -172,20 +177,13 @@ public class DynamicTextureCache implements IGui {
 				final Font newFont;
 				if (fontSized.canDisplay(character)) {
 					newFont = fontSized;
-				} else if (fontCjkSized.canDisplay(character)) {
-					newFont = fontCjkSized;
-				} else {
-					Font defaultFont = null;
-					for (final Font testFont : GraphicsEnvironment.getLocalGraphicsEnvironment().getAllFonts()) {
-						if (testFont.canDisplay(character)) {
-							defaultFont = testFont;
-							break;
-						}
+					} else if (fontCjkSized.canDisplay(character)) {
+						newFont = fontCjkSized;
+					} else {
+						newFont = getFallbackFont(character).deriveFont(Font.PLAIN, newFontSize);
 					}
-					newFont = (defaultFont == null ? new Font(null) : defaultFont).deriveFont(Font.PLAIN, newFontSize);
-				}
-				textWidths[index] += newFont.getStringBounds(textSplit[index].substring(characterIndex, characterIndex + 1), context).getBounds().width;
-				attributedStrings[index].addAttribute(TextAttribute.FONT, newFont, characterIndex, characterIndex + 1);
+					textWidths[index] += newFont.getStringBounds(textSplit[index].substring(characterIndex, characterIndex + 1), context).getBounds().width;
+					attributedStrings[index].addAttribute(TextAttribute.FONT, newFont, characterIndex, characterIndex + 1);
 			}
 
 			if (oneRow) {
@@ -308,6 +306,29 @@ public class DynamicTextureCache implements IGui {
 			dynamicResource.needsRefresh = false;
 			return dynamicResource;
 		}
+	}
+
+	private Font getFallbackFont(char character) {
+		final int charKey = character;
+		final Font cachedFont = fallbackFonts.get(charKey);
+		if (cachedFont != null) {
+			return cachedFont;
+		}
+
+		if (systemFonts == null) {
+			systemFonts = GraphicsEnvironment.getLocalGraphicsEnvironment().getAllFonts();
+		}
+
+		for (final Font testFont : systemFonts) {
+			if (testFont.canDisplay(character)) {
+				fallbackFonts.put(charKey, testFont);
+				return testFont;
+			}
+		}
+
+		final Font defaultFont = new Font(null);
+		fallbackFonts.put(charKey, defaultFont);
+		return defaultFont;
 	}
 
 	public static class DynamicResource {

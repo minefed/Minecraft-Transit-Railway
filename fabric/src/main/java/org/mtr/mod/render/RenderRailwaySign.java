@@ -29,7 +29,6 @@ import javax.annotation.Nullable;
 import java.util.ArrayList;
 import java.util.Comparator;
 import java.util.List;
-import java.util.stream.Collectors;
 
 public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends BlockEntityRenderer<T> implements IBlock, IGui, IDrawing {
 
@@ -188,15 +187,24 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 
 			final ObjectArrayList<IntObjectImmutablePair<String>> selectedRoutesSorted = new ObjectArrayList<>();
 			final IntAVLTreeSet addedColors = new IntAVLTreeSet();
-			MinecraftClientData.getInstance().simplifiedRoutes.forEach(simplifiedRoute -> {
-				if (!simplifiedRoute.getName().isEmpty()) {
-					final int color = simplifiedRoute.getColor();
-					if (!addedColors.contains(color) && selectedIds.contains(color) && simplifiedRoute.getPlatforms().stream().anyMatch(simplifiedRoutePlatform -> platformIds.contains(simplifiedRoutePlatform.getPlatformId()))) {
-						selectedRoutesSorted.add(new IntObjectImmutablePair<>(color, simplifiedRoute.getName().split("\\|\\|")[0]));
-						addedColors.add(color);
+				MinecraftClientData.getInstance().simplifiedRoutes.forEach(simplifiedRoute -> {
+					if (!simplifiedRoute.getName().isEmpty()) {
+						final int color = simplifiedRoute.getColor();
+						boolean hasSelectedPlatform = false;
+						for (int i = 0; i < simplifiedRoute.getPlatforms().size(); i++) {
+							if (platformIds.contains(simplifiedRoute.getPlatforms().get(i).getPlatformId())) {
+								hasSelectedPlatform = true;
+								break;
+							}
+						}
+						if (!addedColors.contains(color) && selectedIds.contains(color) && hasSelectedPlatform) {
+							final String routeName = simplifiedRoute.getName();
+							final int splitIndex = routeName.indexOf("||");
+							selectedRoutesSorted.add(new IntObjectImmutablePair<>(color, splitIndex < 0 ? routeName : routeName.substring(0, splitIndex)));
+							addedColors.add(color);
+						}
 					}
-				}
-			});
+				});
 
 			selectedRoutesSorted.sort(Comparator.comparingInt(IntObjectImmutablePair::leftInt));
 			final float maxWidth = Math.max(0, ((flipCustomText ? maxWidthLeft : maxWidthRight) + 1) * size - margin * 2);
@@ -231,14 +239,21 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				});
 				xOffset += width + margin / 2F;
 			}
-		} else if (storedMatrixTransformations != null && isPlatform) {
-			final Station station = InitClient.findStation(pos);
-			if (station == null) {
-				return;
-			}
+			} else if (storedMatrixTransformations != null && isPlatform) {
+				final Station station = InitClient.findStation(pos);
+				if (station == null) {
+					return;
+				}
 
-			final LongArrayList selectedIdsSorted = station.savedRails.stream().sorted().mapToLong(NameColorDataBase::getId).filter(selectedIds::contains).boxed().collect(Collectors.toCollection(LongArrayList::new));
-			final int selectedCount = selectedIdsSorted.size();
+				final LongAVLTreeSet selectedPlatformIds = new LongAVLTreeSet();
+				station.savedRails.forEach(savedRail -> {
+					final long id = savedRail.getId();
+					if (selectedIds.contains(id)) {
+						selectedPlatformIds.add(id);
+					}
+				});
+				final LongArrayList selectedIdsSorted = new LongArrayList(selectedPlatformIds);
+				final int selectedCount = selectedIdsSorted.size();
 
 			final float extraMargin = margin - margin / selectedCount;
 			final float height = (size - extraMargin * 2) / selectedCount;
@@ -276,17 +291,20 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				if (storedMatrixTransformations == null) {
 					IDrawing.drawStringWithFont(graphicsHolder, isExit || isLine ? "..." : sign.getCustomText().getString(), flipCustomText ? HorizontalAlignment.RIGHT : HorizontalAlignment.LEFT, VerticalAlignment.TOP, start, y + fixedMargin, maxWidth, size - fixedMargin * 2, 0.01F, ARGB_WHITE, false, GraphicsHolder.getDefaultLight(), null);
 				} else {
-					final String signText;
-					if (isStation) {
-						signText = IGui.mergeStations(selectedIds.longStream()
-								.filter(MinecraftClientData.getInstance().stationIdMap::containsKey)
-								.sorted()
-								.mapToObj(stationId -> IGui.insertTranslation(TranslationProvider.GUI_MTR_STATION_CJK, TranslationProvider.GUI_MTR_STATION, 1, MinecraftClientData.getInstance().stationIdMap.get(stationId).getName()))
-								.collect(Collectors.toList())
-						);
-					} else {
-						signText = sign.getCustomText().getString();
-					}
+						final String signText;
+						if (isStation) {
+							final LongAVLTreeSet sortedStationIds = new LongAVLTreeSet(selectedIds);
+							final ObjectArrayList<String> stationNames = new ObjectArrayList<>();
+							sortedStationIds.forEach(stationId -> {
+								final Station station = MinecraftClientData.getInstance().stationIdMap.get(stationId);
+								if (station != null) {
+									stationNames.add(IGui.insertTranslation(TranslationProvider.GUI_MTR_STATION_CJK, TranslationProvider.GUI_MTR_STATION, 1, station.getName()));
+								}
+							});
+							signText = IGui.mergeStations(stationNames);
+						} else {
+							signText = sign.getCustomText().getString();
+						}
 					renderCustomText(signText, storedMatrixTransformations, facing, size, start, flipCustomText, maxWidth, backgroundColor);
 				}
 			}

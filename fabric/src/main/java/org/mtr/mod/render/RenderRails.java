@@ -50,8 +50,13 @@ public class RenderRails implements IGui {
 	private static final Identifier WOOL_TEXTURE = new Identifier("textures/block/white_wool.png");
 	private static final Identifier ONE_WAY_RAIL_ARROW_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/one_way_rail_arrow.png");
 	private static final int INVALID_NODE_CHECK_RADIUS = 16;
+	private static final int INVALID_NODE_UPDATE_INTERVAL = 10;
 	private static final double LIGHT_REFERENCE_OFFSET = 0.1;
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier(Init.MOD_ID, "textures/block/white.png"));
+	private static final ObjectArrayList<BlockPos> INVALID_NODES_TO_RENDER = new ObjectArrayList<>();
+	@Nullable
+	private static BlockPos invalidNodeCenter;
+	private static long lastInvalidNodeUpdateTick = Long.MIN_VALUE;
 
 	public static void render() {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
@@ -62,13 +67,13 @@ public class RenderRails implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>(MinecraftClientData.getInstance().railWrapperList.size());
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 		final boolean holdingRailRelated = isHoldingRailRelated(clientPlayerEntity);
 
 		// Finding visible rails
-		final ObjectArrayList<Rail> railsToRender = new ObjectArrayList<>();
+		final ObjectArrayList<Rail> railsToRender = new ObjectArrayList<>(MinecraftClientData.getInstance().railWrapperList.size());
 		MinecraftClientData.getInstance().railWrapperList.values().forEach(railWrapper -> {
 			cullingTasks.add(occlusionCullingInstance -> {
 				final boolean shouldRender = occlusionCullingInstance.isAABBVisible(railWrapper.startVector, railWrapper.endVector, camera);
@@ -184,32 +189,28 @@ public class RenderRails implements IGui {
 			}
 		});
 
-		if (holdingRailRelated) {
-			// Render nodes
-			MinecraftClientData.getInstance().positionsToRail.keySet().forEach(position -> {
-				final BlockPos blockPos = Init.positionToBlockPos(position);
-				renderNode(clientWorld.getBlockState(blockPos), blockPos, () -> true, GraphicsHolder.getDefaultLight());
-			});
+			if (holdingRailRelated) {
+				// Render nodes
+				MinecraftClientData.getInstance().positionsToRail.keySet().forEach(position -> {
+					final BlockPos blockPos = Init.positionToBlockPos(position);
+					renderNode(clientWorld.getBlockState(blockPos), blockPos, () -> true, GraphicsHolder.getDefaultLight());
+				});
 
-			// Render nodes with the connected block state but isn't actually connected
-			for (int x = -INVALID_NODE_CHECK_RADIUS; x <= INVALID_NODE_CHECK_RADIUS; x++) {
-				for (int y = -INVALID_NODE_CHECK_RADIUS; y <= INVALID_NODE_CHECK_RADIUS; y++) {
-					for (int z = -INVALID_NODE_CHECK_RADIUS; z <= INVALID_NODE_CHECK_RADIUS; z++) {
-						final BlockPos blockPos = clientPlayerEntity.getBlockPos().add(x, y, z);
-						final BlockState blockState = clientWorld.getBlockState(blockPos);
-						renderNode(blockState, blockPos, () -> blockState.get(new Property<>(BlockNode.IS_CONNECTED.data)) && !MinecraftClientData.getInstance().positionsToRail.containsKey(Init.blockPosToPosition(blockPos)), MainRenderer.getFlashingLight());
-					}
-				}
+				// Render nodes with the connected block state but isn't actually connected
+				updateInvalidNodesIfRequired(clientWorld, clientPlayerEntity.getBlockPos());
+				INVALID_NODES_TO_RENDER.forEach(blockPos -> {
+					final BlockState blockState = clientWorld.getBlockState(blockPos);
+					renderNode(blockState, blockPos, () -> true, MainRenderer.getFlashingLight());
+				});
 			}
-		}
 
-		if (!OptimizedRenderer.renderingShadows()) {
-			MainRenderer.WORKER_THREAD.scheduleRails(occlusionCullingInstance -> {
-				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
-				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
-				minecraftClient.execute(() -> tasks.forEach(Runnable::run));
-			});
-		}
+			if (!OptimizedRenderer.renderingShadows()) {
+				MainRenderer.WORKER_THREAD.scheduleRails(occlusionCullingInstance -> {
+					final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>(cullingTasks.size());
+					cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
+					minecraftClient.execute(() -> tasks.forEach(Runnable::run));
+				});
+			}
 	}
 
 	public static boolean isHoldingRailRelated(ClientPlayerEntity clientPlayerEntity) {
@@ -414,6 +415,30 @@ public class RenderRails implements IGui {
 			}
 		}
 		return ItemStack.getEmptyMapped();
+	}
+
+	private static void updateInvalidNodesIfRequired(ClientWorld clientWorld, BlockPos center) {
+		final long gameTick = (long) Math.floor(InitClient.getGameTick());
+		final boolean moved = invalidNodeCenter == null || invalidNodeCenter.getManhattanDistance(new Vector3i(center.data)) > 1;
+		if (!moved && gameTick - lastInvalidNodeUpdateTick < INVALID_NODE_UPDATE_INTERVAL) {
+			return;
+		}
+
+		INVALID_NODES_TO_RENDER.clear();
+		for (int x = -INVALID_NODE_CHECK_RADIUS; x <= INVALID_NODE_CHECK_RADIUS; x++) {
+			for (int y = -INVALID_NODE_CHECK_RADIUS; y <= INVALID_NODE_CHECK_RADIUS; y++) {
+				for (int z = -INVALID_NODE_CHECK_RADIUS; z <= INVALID_NODE_CHECK_RADIUS; z++) {
+					final BlockPos blockPos = center.add(x, y, z);
+					final BlockState blockState = clientWorld.getBlockState(blockPos);
+					if (blockState.getBlock().data instanceof BlockNode && blockState.get(new Property<>(BlockNode.IS_CONNECTED.data)) && !MinecraftClientData.getInstance().positionsToRail.containsKey(Init.blockPosToPosition(blockPos))) {
+						INVALID_NODES_TO_RENDER.add(blockPos);
+					}
+				}
+			}
+		}
+
+		invalidNodeCenter = center;
+		lastInvalidNodeUpdateTick = gameTick;
 	}
 
 	private enum RenderState {

@@ -41,7 +41,6 @@ import org.mtr.mod.sound.LoopingSoundInstance;
 import org.mtr.mod.sound.ScheduledSound;
 
 import javax.annotation.Nullable;
-import java.util.Comparator;
 import java.util.function.Consumer;
 import java.util.function.Function;
 
@@ -495,12 +494,56 @@ public final class InitClient {
 	}
 
 	public static Station findStation(BlockPos blockPos) {
-		return MinecraftClientData.getInstance().stations.stream().filter(station -> station.inArea(Init.blockPosToPosition(blockPos))).findFirst().orElse(null);
+		final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
+		final Position position = Init.blockPosToPosition(blockPos);
+		final ObjectArrayList<Station> nearbyStations = minecraftClientData.getNearbyStations(blockPos);
+		for (int i = 0; i < nearbyStations.size(); i++) {
+			final Station station = nearbyStations.get(i);
+			if (station.inArea(position)) {
+				return station;
+			}
+		}
+		for (final Station station : minecraftClientData.stations) {
+			if (station.inArea(position)) {
+				return station;
+			}
+		}
+		return null;
 	}
 
 	public static void findClosePlatform(BlockPos blockPos, int radius, Consumer<Platform> consumer) {
+		final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
 		final Position position = Init.blockPosToPosition(blockPos);
-		MinecraftClientData.getInstance().platforms.stream().filter(platform -> platform.closeTo(Init.blockPosToPosition(blockPos), radius)).min(Comparator.comparingDouble(platform -> platform.getApproximateClosestDistance(position, MinecraftClientData.getInstance()))).ifPresent(consumer);
+		final ObjectArrayList<Platform> nearbyPlatforms = minecraftClientData.getNearbyPlatforms(blockPos, radius);
+		Platform closestPlatform = null;
+		double closestDistance = Double.MAX_VALUE;
+
+		for (int i = 0; i < nearbyPlatforms.size(); i++) {
+			final Platform platform = nearbyPlatforms.get(i);
+			if (platform.closeTo(position, radius)) {
+				final double distance = platform.getApproximateClosestDistance(position, minecraftClientData);
+				if (distance < closestDistance) {
+					closestDistance = distance;
+					closestPlatform = platform;
+				}
+			}
+		}
+
+		if (closestPlatform == null) {
+			for (final Platform platform : minecraftClientData.platforms) {
+				if (platform.closeTo(position, radius)) {
+					final double distance = platform.getApproximateClosestDistance(position, minecraftClientData);
+					if (distance < closestDistance) {
+						closestDistance = distance;
+						closestPlatform = platform;
+					}
+				}
+			}
+		}
+
+		if (closestPlatform != null) {
+			consumer.accept(closestPlatform);
+		}
 	}
 
 	@Nullable

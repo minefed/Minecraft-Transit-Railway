@@ -1,8 +1,9 @@
 package org.mtr.mod.resource;
 
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
-
 import javax.annotation.Nullable;
+import java.util.Comparator;
+import java.util.NavigableSet;
+import java.util.TreeSet;
 import java.util.function.Supplier;
 
 public final class CachedResource<T> {
@@ -10,17 +11,21 @@ public final class CachedResource<T> {
 	@Nullable
 	private T data;
 	private long expiry;
+	@Nullable
+	private CacheExpiry cacheExpiry;
 
 	private final Supplier<T> dataSupplier;
 	private final long lifespan;
+	private final long cacheId;
 
 	private static boolean canFetchCache;
-	private static final ObjectArrayList<CachedResource<?>> CACHED_RESOURCES = new ObjectArrayList<>();
+	private static long nextCacheId;
+	private static final NavigableSet<CacheExpiry> CACHE_EXPIRIES = new TreeSet<>(Comparator.comparingLong((CacheExpiry value) -> value.expiry).thenComparingLong(value -> value.cacheId));
 
 	public CachedResource(final Supplier<T> dataSupplier, final long lifespan) {
 		this.dataSupplier = dataSupplier;
 		this.lifespan = lifespan;
-		CACHED_RESOURCES.add(this);
+		cacheId = nextCacheId++;
 	}
 
 	@Nullable
@@ -31,7 +36,13 @@ public final class CachedResource<T> {
 				data = dataSupplier.get();
 				canFetchCache = false;
 			}
+
 			expiry = currentMillis + lifespan;
+			if (cacheExpiry != null) {
+				CACHE_EXPIRIES.remove(cacheExpiry);
+			}
+			cacheExpiry = new CacheExpiry(this, expiry, cacheId);
+			CACHE_EXPIRIES.add(cacheExpiry);
 		}
 		return data;
 	}
@@ -39,10 +50,29 @@ public final class CachedResource<T> {
 	public static void tick() {
 		canFetchCache = true;
 		final long currentMillis = System.currentTimeMillis();
-		CACHED_RESOURCES.forEach(cachedResource -> {
-			if (currentMillis > cachedResource.expiry) {
-				cachedResource.data = null;
+		while (!CACHE_EXPIRIES.isEmpty()) {
+			final CacheExpiry cacheExpiry = CACHE_EXPIRIES.first();
+			if (cacheExpiry.expiry > currentMillis) {
+				break;
 			}
-		});
+			CACHE_EXPIRIES.pollFirst();
+			if (cacheExpiry.cachedResource.cacheExpiry == cacheExpiry) {
+				cacheExpiry.cachedResource.data = null;
+				cacheExpiry.cachedResource.cacheExpiry = null;
+			}
+		}
+	}
+
+	private static class CacheExpiry {
+
+		private final CachedResource<?> cachedResource;
+		private final long expiry;
+		private final long cacheId;
+
+		private CacheExpiry(CachedResource<?> cachedResource, long expiry, long cacheId) {
+			this.cachedResource = cachedResource;
+			this.expiry = expiry;
+			this.cacheId = cacheId;
+		}
 	}
 }

@@ -67,14 +67,15 @@ public final class PacketUpdateData extends PacketRequestResponseBase {
 	}
 
 	public static void sendDirectlyToClientDepotUpdate(ServerWorld serverWorld, UpdateDataResponse updateDataResponse) {
-		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, new PacketUpdateData(Utilities.getJsonObjectFromData(updateDataResponse).toString())));
+		final PacketUpdateData packet = new PacketUpdateData(Utilities.getJsonObjectFromData(updateDataResponse).toString());
+		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, packet));
 	}
 
 	private static void update(JsonReader jsonReader) {
 		final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
 		new UpdateDataResponse(jsonReader, minecraftClientData).write();
 		new UpdateDataResponse(jsonReader, MinecraftClientData.getDashboardInstance()).write();
-		minecraftClientData.vehicles.forEach(vehicle -> PathData.writePathCache(vehicle.vehicleExtraData.immutablePath, new MinecraftClientData(), vehicle.getTransportMode()));
+		minecraftClientData.vehicles.forEach(vehicle -> PathData.writePathCache(vehicle.vehicleExtraData.immutablePath, minecraftClientData, vehicle.getTransportMode()));
 		DynamicTextureCache.instance.refresh();
 	}
 }

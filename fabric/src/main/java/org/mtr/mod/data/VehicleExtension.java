@@ -332,7 +332,8 @@ public class VehicleExtension extends Vehicle implements Utilities {
 	}
 
 	private static String formatRouteName(String routeName) {
-		return routeName.split("\\|\\|")[0];
+		final int splitIndex = routeName.indexOf("||");
+		return splitIndex < 0 ? routeName : routeName.substring(0, splitIndex);
 	}
 
 	private static String getInterchangeText(ObjectArrayList<String> names) {

@@ -3,6 +3,7 @@ package org.mtr.mod.packet;
 import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
@@ -15,14 +16,13 @@ import org.mtr.mapping.tool.PacketBufferSender;
 import org.mtr.mod.Init;
 import org.mtr.mod.data.ArrivalsCacheServer;
 
-import java.util.Random;
-import java.util.stream.Collectors;
+import java.util.concurrent.ThreadLocalRandom;
 
 public final class PacketFetchArrivals extends PacketHandler {
 
 	private final LongAVLTreeSet platformIds;
 	private final long responseTime;
-	private final ObjectArrayList<String> responses = new ObjectArrayList<>();
+	private final String serializedResponses;
 	private final long callbackId;
 
 	private static final Long2ObjectAVLTreeMap<Callback> CALLBACKS = new Long2ObjectAVLTreeMap<>();
@@ -35,11 +35,7 @@ public final class PacketFetchArrivals extends PacketHandler {
 		}
 
 		responseTime = packetBufferReceiver.readLong();
-
-		final int responseCount = packetBufferReceiver.readInt();
-		for (int i = 0; i < responseCount; i++) {
-			responses.add(packetBufferReceiver.readString());
-		}
+		serializedResponses = packetBufferReceiver.readString();
 
 		callbackId = packetBufferReceiver.readLong();
 	}
@@ -47,14 +43,17 @@ public final class PacketFetchArrivals extends PacketHandler {
 	public PacketFetchArrivals(LongAVLTreeSet platformIds, Callback callback) {
 		this.platformIds = platformIds;
 		responseTime = 0;
-		callbackId = new Random().nextLong();
+		serializedResponses = "";
+		callbackId = ThreadLocalRandom.current().nextLong();
 		CALLBACKS.put(callbackId, callback);
 	}
 
 	private PacketFetchArrivals(long responseTime, ObjectArrayList<ArrivalResponse> arrivalResponses, long callbackId) {
 		platformIds = new LongAVLTreeSet();
 		this.responseTime = responseTime;
-		arrivalResponses.forEach(arrivalResponse -> responses.add(Utilities.getJsonObjectFromData(arrivalResponse).toString()));
+		final JsonArray jsonArray = new JsonArray();
+		arrivalResponses.forEach(arrivalResponse -> jsonArray.add(Utilities.getJsonObjectFromData(arrivalResponse)));
+		serializedResponses = jsonArray.toString();
 		this.callbackId = callbackId;
 	}
 
@@ -63,8 +62,7 @@ public final class PacketFetchArrivals extends PacketHandler {
 		packetBufferSender.writeInt(platformIds.size());
 		platformIds.forEach(packetBufferSender::writeLong);
 		packetBufferSender.writeLong(responseTime);
-		packetBufferSender.writeInt(responses.size());
-		responses.forEach(packetBufferSender::writeString);
+		packetBufferSender.writeString(serializedResponses);
 		packetBufferSender.writeLong(callbackId);
 	}
 
@@ -78,7 +76,11 @@ public final class PacketFetchArrivals extends PacketHandler {
 	public void runClient() {
 		final Callback callback = CALLBACKS.remove(callbackId);
 		if (callback != null) {
-			callback.accept(responseTime, responses.stream().map(response -> new ArrivalResponse(new JsonReader(Utilities.parseJson(response)))).collect(Collectors.toCollection(ObjectArrayList::new)));
+			final ObjectArrayList<ArrivalResponse> arrivalResponses = new ObjectArrayList<>();
+			if (!serializedResponses.isEmpty()) {
+				Utilities.parseJson(serializedResponses).getAsJsonArray().forEach(jsonElement -> arrivalResponses.add(new ArrivalResponse(new JsonReader(jsonElement.getAsJsonObject()))));
+			}
+			callback.accept(responseTime, arrivalResponses);
 		}
 	}
 

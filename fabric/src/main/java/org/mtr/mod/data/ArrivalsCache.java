@@ -4,6 +4,7 @@ import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2IntAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongCollection;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectList;
 
@@ -27,10 +28,11 @@ public abstract class ArrivalsCache {
 		}
 
 		platformIds.forEach(platformId -> queuedPlatformIdsWithAge.put(platformId, 0));
+		final LongCollection platformIdsLookup = platformIds instanceof LongAVLTreeSet ? platformIds : new LongOpenHashSet(platformIds);
 
 		final ObjectArrayList<ArrivalResponse> arrivals = new ObjectArrayList<>();
 		arrivalResponseCache.forEach(arrivalResponse -> {
-			if (platformIds.contains(arrivalResponse.getPlatformId())) {
+			if (platformIdsLookup.contains(arrivalResponse.getPlatformId())) {
 				arrivals.add(arrivalResponse);
 			}
 		});

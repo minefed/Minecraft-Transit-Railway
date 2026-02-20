@@ -2,7 +2,6 @@ package org.mtr.mod.render;
 
 import com.logisticscraft.occlusionculling.DataProvider;
 import com.logisticscraft.occlusionculling.OcclusionCullingInstance;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mapping.holder.BlockView;
 import org.mtr.mapping.holder.ClientWorld;
@@ -11,6 +10,8 @@ import org.mtr.mapping.mapper.MinecraftClientHelper;
 import org.mtr.mod.CustomThread;
 import org.mtr.mod.Init;
 
+import java.util.ArrayDeque;
+import java.util.Deque;
 import java.util.function.Consumer;
 
 /**
@@ -22,10 +23,10 @@ public final class WorkerThread extends CustomThread {
 	private static final int MAX_QUEUE_SIZE = 2;
 	private int renderDistance;
 	private OcclusionCullingInstance occlusionCullingInstance;
-	private final ObjectArrayList<Consumer<OcclusionCullingInstance>> occlusionQueueVehicle = new ObjectArrayList<>();
-	private final ObjectArrayList<Consumer<OcclusionCullingInstance>> occlusionQueueLift = new ObjectArrayList<>();
-	private final ObjectArrayList<Consumer<OcclusionCullingInstance>> occlusionQueueRail = new ObjectArrayList<>();
-	private final ObjectArrayList<Runnable> dynamicTextureQueue = new ObjectArrayList<>();
+	private final Deque<Consumer<OcclusionCullingInstance>> occlusionQueueVehicle = new ArrayDeque<>();
+	private final Deque<Consumer<OcclusionCullingInstance>> occlusionQueueLift = new ArrayDeque<>();
+	private final Deque<Consumer<OcclusionCullingInstance>> occlusionQueueRail = new ArrayDeque<>();
+	private final Deque<Runnable> dynamicTextureQueue = new ArrayDeque<>();
 
 	@Override
 	protected void runTick() {
@@ -51,24 +52,24 @@ public final class WorkerThread extends CustomThread {
 
 	public void scheduleVehicles(Consumer<OcclusionCullingInstance> consumer) {
 		if (occlusionQueueVehicle.size() < MAX_QUEUE_SIZE) {
-			occlusionQueueVehicle.add(consumer);
+			occlusionQueueVehicle.addLast(consumer);
 		}
 	}
 
 	public void scheduleLifts(Consumer<OcclusionCullingInstance> consumer) {
 		if (occlusionQueueLift.size() < MAX_QUEUE_SIZE) {
-			occlusionQueueLift.add(consumer);
+			occlusionQueueLift.addLast(consumer);
 		}
 	}
 
 	public void scheduleRails(Consumer<OcclusionCullingInstance> consumer) {
 		if (occlusionQueueRail.size() < MAX_QUEUE_SIZE) {
-			occlusionQueueRail.add(consumer);
+			occlusionQueueRail.addLast(consumer);
 		}
 	}
 
 	public void scheduleDynamicTextures(Runnable runnable) {
-		dynamicTextureQueue.add(runnable);
+		dynamicTextureQueue.addLast(runnable);
 	}
 
 	private void updateInstance() {
@@ -79,10 +80,10 @@ public final class WorkerThread extends CustomThread {
 		}
 	}
 
-	private static <T> void run(ObjectArrayList<T> queue, Consumer<T> consumer) {
+	private static <T> void run(Deque<T> queue, Consumer<T> consumer) {
 		if (!queue.isEmpty()) {
 			try {
-				final T task = queue.remove(0);
+				final T task = queue.pollFirst();
 				if (task != null) {
 					consumer.accept(task);
 				}

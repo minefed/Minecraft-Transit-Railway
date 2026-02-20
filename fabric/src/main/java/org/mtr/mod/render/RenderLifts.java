@@ -8,6 +8,7 @@ import org.mtr.core.data.LiftFloor;
 import org.mtr.core.data.Position;
 import org.mtr.core.tool.Vector;
 import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntObjectImmutablePair;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectBooleanImmutablePair;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
@@ -36,6 +37,7 @@ public class RenderLifts implements IGui {
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier("textures/block/redstone_block.png"));
 	private static final float LIFT_DOOR_VALUE = 0.75F;
 	private static final float LIFT_FLOOR_PADDING = 0.25F;
+	private static final Object2ObjectOpenHashMap<String, ModelLift1> MODEL_LIFT_CACHE = new Object2ObjectOpenHashMap<>();
 
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
@@ -45,7 +47,7 @@ public class RenderLifts implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>(MinecraftClientData.getInstance().liftWrapperList.size());
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 
@@ -159,13 +161,16 @@ public class RenderLifts implements IGui {
 					});
 				}
 
-				// Render the lift
-				final StoredMatrixTransformations storedMatrixTransformations = RenderVehicles.getStoredMatrixTransformations(offsetVector == null, renderingPositionAndRotation, 0);
-				new ModelLift1((int) Math.round(lift.getHeight() * 2), (int) Math.round(lift.getWidth()), (int) Math.round(lift.getDepth()), lift.getIsDoubleSided()).render(
-						storedMatrixTransformations,
-						null,
-						getLiftResource(lift.getStyle()).getTexture(),
-						absolutePositionAndRotation.light,
+					// Render the lift
+					final StoredMatrixTransformations storedMatrixTransformations = RenderVehicles.getStoredMatrixTransformations(offsetVector == null, renderingPositionAndRotation, 0);
+					final int modelHeight = (int) Math.round(lift.getHeight() * 2);
+					final int modelWidth = (int) Math.round(lift.getWidth());
+					final int modelDepth = (int) Math.round(lift.getDepth());
+					getLiftModel(modelHeight, modelWidth, modelDepth, lift.getIsDoubleSided()).render(
+							storedMatrixTransformations,
+							null,
+							getLiftResource(lift.getStyle()).getTexture(),
+							absolutePositionAndRotation.light,
 						doorway1Open ? lift.getDoorValue() / LIFT_DOOR_VALUE : 0, doorway2Open ? lift.getDoorValue() / LIFT_DOOR_VALUE : 0, false,
 						0, 1, true, true, false, true, false
 				);
@@ -195,13 +200,13 @@ public class RenderLifts implements IGui {
 			}
 		});
 
-		if (!OptimizedRenderer.renderingShadows()) {
-			MainRenderer.WORKER_THREAD.scheduleLifts(occlusionCullingInstance -> {
-				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
-				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
-				minecraftClient.execute(() -> tasks.forEach(Runnable::run));
-			});
-		}
+			if (!OptimizedRenderer.renderingShadows()) {
+				MainRenderer.WORKER_THREAD.scheduleLifts(occlusionCullingInstance -> {
+					final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>(cullingTasks.size());
+					cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
+					minecraftClient.execute(() -> tasks.forEach(Runnable::run));
+				});
+			}
 	}
 
 	public static void renderLiftDisplay(StoredMatrixTransformations storedMatrixTransformations, World world, Lift lift, float width, float height) {
@@ -261,5 +266,10 @@ public class RenderLifts implements IGui {
 				position.y + lift.getOffsetY(),
 				position.z + lift.getOffsetZ()
 		), -Math.PI / 2 - lift.getAngle().angleRadians, 0);
+	}
+
+	private static ModelLift1 getLiftModel(int height, int width, int depth, boolean isDoubleSided) {
+		final String key = height + "_" + width + "_" + depth + "_" + isDoubleSided;
+		return MODEL_LIFT_CACHE.computeIfAbsent(key, ignored -> new ModelLift1(height, width, depth, isDoubleSided));
 	}
 }

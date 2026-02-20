@@ -29,17 +29,19 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 
 	private static long timerMillis;
 	private static long lastRenderedMillis;
+	private static final Identifier EMPTY_IDENTIFIER = new Identifier("");
 
 	public static final WorkerThread WORKER_THREAD = new WorkerThread();
 
 	private static final int FLASHING_INTERVAL = 1000;
 	private static final int TOTAL_RENDER_STAGES = 2;
+	private static final QueuedRenderLayer[] QUEUED_RENDER_LAYERS = QueuedRenderLayer.values();
 	private static final ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> RENDERS = new ObjectArrayList<>(TOTAL_RENDER_STAGES);
 	private static final ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> CURRENT_RENDERS = new ObjectArrayList<>(TOTAL_RENDER_STAGES);
 
 	static {
 		for (int i = 0; i < TOTAL_RENDER_STAGES; i++) {
-			final int renderStageCount = QueuedRenderLayer.values().length;
+			final int renderStageCount = QUEUED_RENDER_LAYERS.length;
 			final ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>> rendersList = new ObjectArrayList<>(renderStageCount);
 			final ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>> currentRendersList = new ObjectArrayList<>(renderStageCount);
 
@@ -92,9 +94,10 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 			millisElapsed = getMillisElapsed();
 			timerMillis += millisElapsed;
 
-			MinecraftClientData.getInstance().blockedRailIds.clear();
-			MinecraftClientData.getInstance().vehicles.forEach(vehicle -> vehicle.simulate(millisElapsed));
-			MinecraftClientData.getInstance().lifts.forEach(lift -> {
+			final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
+			minecraftClientData.blockedRailIds.clear();
+			minecraftClientData.vehicles.forEach(vehicle -> vehicle.simulate(millisElapsed));
+			minecraftClientData.lifts.forEach(lift -> {
 				lift.tick(millisElapsed);
 				if (VehicleRidingMovement.isRiding(lift.getId()) && VehicleRidingMovement.showShiftProgressBar()) {
 					clientPlayerEntity.sendMessage(TranslationProvider.GUI_MTR_PRESS_TO_SELECT_FLOOR.getText(KeyBindings.LIFT_MENU.getBoundKeyLocalizedText().getString()), true);
@@ -114,16 +117,18 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 		RenderRails.render();
 
 		for (int i = 0; i < TOTAL_RENDER_STAGES; i++) {
-			for (int j = 0; j < QueuedRenderLayer.values().length; j++) {
-				CURRENT_RENDERS.get(i).get(j).clear();
-				CURRENT_RENDERS.get(i).get(j).putAll(RENDERS.get(i).get(j));
-				RENDERS.get(i).get(j).clear();
+			for (int j = 0; j < QUEUED_RENDER_LAYERS.length; j++) {
+				final Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>> currentRenderMap = CURRENT_RENDERS.get(i).get(j);
+				currentRenderMap.clear();
+				final Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>> queuedRenderMap = RENDERS.get(i).get(j);
+				CURRENT_RENDERS.get(i).set(j, queuedRenderMap);
+				RENDERS.get(i).set(j, currentRenderMap);
 			}
 		}
 
 		for (int i = 0; i < TOTAL_RENDER_STAGES; i++) {
-			for (int j = 0; j < QueuedRenderLayer.values().length; j++) {
-				final QueuedRenderLayer queuedRenderLayer = QueuedRenderLayer.values()[j];
+			for (int j = 0; j < QUEUED_RENDER_LAYERS.length; j++) {
+				final QueuedRenderLayer queuedRenderLayer = QUEUED_RENDER_LAYERS[j];
 				CURRENT_RENDERS.get(i).get(j).forEach((key, value) -> {
 					final RenderLayer renderLayer;
 					switch (queuedRenderLayer) {
@@ -173,7 +178,7 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 	}
 
 	public static void scheduleRender(QueuedRenderLayer queuedRenderLayer, BiConsumer<GraphicsHolder, Vector3d> callback) {
-		scheduleRender(new Identifier(""), false, queuedRenderLayer, callback);
+		scheduleRender(EMPTY_IDENTIFIER, false, queuedRenderLayer, callback);
 	}
 
 	public static void cancelRender(Identifier identifier) {

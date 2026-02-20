@@ -27,11 +27,11 @@ import org.mtr.mod.servlet.ResourcePackCreatorOperationServlet;
 import javax.annotation.Nullable;
 import java.util.UUID;
 import java.util.function.Function;
-import java.util.stream.Collectors;
 
 public class RenderVehicles implements IGui {
 
 	public static final ObjectArrayList<RidingPlayerInterpolation> RIDING_PLAYER_INTERPOLATIONS = new ObjectArrayList<>();
+	private static final ObjectArrayList<ObjectDoubleImmutablePair<Box>> EMPTY_OPEN_DOORWAYS = new ObjectArrayList<>();
 
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
@@ -41,7 +41,7 @@ public class RenderVehicles implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>(MinecraftClientData.getInstance().vehicles.size());
 		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 
@@ -58,16 +58,18 @@ public class RenderVehicles implements IGui {
 			final PreviousGangwayMovementPositions previousGangwayMovementPositions = new PreviousGangwayMovementPositions();
 
 			// Calculating vehicle transformations in advance
-			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectObjectImmutablePair<ObjectArrayList<PositionAndRotation>, PositionAndRotation>>> vehiclePropertiesList = vehicle.getSmoothedVehicleCarsAndPositions(millisElapsed)
-					.stream()
-					.map(vehicleCarAndPosition -> {
-						final ObjectArrayList<PositionAndRotation> bogiePositions = vehicleCarAndPosition.right()
-								.stream()
-								.map(bogiePositionPair -> new PositionAndRotation(bogiePositionPair.left(), bogiePositionPair.right(), true))
-								.collect(Collectors.toCollection(ObjectArrayList::new));
-						return new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, new PositionAndRotation(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending)));
-					})
-					.collect(Collectors.toCollection(ObjectArrayList::new));
+			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<ObjectObjectImmutablePair<Vector, Vector>>>> smoothedVehicleCarsAndPositions = vehicle.getSmoothedVehicleCarsAndPositions(millisElapsed);
+			final ObjectArrayList<ObjectObjectImmutablePair<VehicleCar, ObjectObjectImmutablePair<ObjectArrayList<PositionAndRotation>, PositionAndRotation>>> vehiclePropertiesList = new ObjectArrayList<>(smoothedVehicleCarsAndPositions.size());
+			for (int i = 0; i < smoothedVehicleCarsAndPositions.size(); i++) {
+				final ObjectObjectImmutablePair<VehicleCar, ObjectArrayList<ObjectObjectImmutablePair<Vector, Vector>>> vehicleCarAndPosition = smoothedVehicleCarsAndPositions.get(i);
+				final ObjectArrayList<ObjectObjectImmutablePair<Vector, Vector>> bogiePositionPairs = vehicleCarAndPosition.right();
+				final ObjectArrayList<PositionAndRotation> bogiePositions = new ObjectArrayList<>(bogiePositionPairs.size());
+				for (int j = 0; j < bogiePositionPairs.size(); j++) {
+					final ObjectObjectImmutablePair<Vector, Vector> bogiePositionPair = bogiePositionPairs.get(j);
+					bogiePositions.add(new PositionAndRotation(bogiePositionPair.left(), bogiePositionPair.right(), true));
+				}
+				vehiclePropertiesList.add(new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, new PositionAndRotation(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending))));
+			}
 
 			// Riding offset
 			final IntObjectImmutablePair<ObjectObjectImmutablePair<Vector3d, Double>> ridingVehicleCarNumberAndOffset = VehicleRidingMovement.getRidingVehicleCarNumberAndOffset(vehicle.getId());
@@ -118,12 +120,12 @@ public class RenderVehicles implements IGui {
 						iterateWithIndex(vehicleCarDetails.right().left(), (bogieIndex, absoluteBogiePositionAndRotation) -> {
 							final PositionAndRotation bogieRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteBogiePositionAndRotation, cameraShakeOffset);
 							final StoredMatrixTransformations storedMatrixTransformations = getStoredMatrixTransformations(offsetVector == null, bogieRenderingPositionAndRotation, 0);
-							if (OptimizedRenderer.hasOptimizedRendering()) {
-								vehicleResource.queueBogie(bogieIndex, storedMatrixTransformations, vehicle, absoluteVehicleCarPositionAndRotation.light);
-							} else {
-								vehicleResource.iterateBogieModels(bogieIndex, (modelIndex, model) -> model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, new ObjectArrayList<>(), fromResourcePackCreator));
-							}
-						});
+								if (OptimizedRenderer.hasOptimizedRendering()) {
+									vehicleResource.queueBogie(bogieIndex, storedMatrixTransformations, vehicle, absoluteVehicleCarPositionAndRotation.light);
+								} else {
+									vehicleResource.iterateBogieModels(bogieIndex, (modelIndex, model) -> model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, EMPTY_OPEN_DOORWAYS, fromResourcePackCreator));
+								}
+							});
 
 						// Player position relative to the car
 						final Vector3d playerPosition = absoluteVehicleCarPositionAndRotation.transformBackwards(clientPlayerEntity.getPos(), Vector3d::rotateX, Vector3d::rotateY, Vector3d::add);
@@ -136,11 +138,16 @@ public class RenderVehicles implements IGui {
 						final VehicleResourceCache vehicleResourceCache = vehicleResource.getCachedVehicleResource(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), false);
 						// Find open doorways (close to platform blocks, unlocked platform screen doors, or unlocked automatic platform gates)
 						final ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways;
-						if (vehicleResourceCache != null && fromResourcePackCreator) {
-							openDoorways = vehicle.persistentVehicleData.checkCanOpenDoors() ? vehicleResourceCache.doorways.stream().map(doorway -> new ObjectDoubleImmutablePair<>(doorway, 0)).collect(Collectors.toCollection(ObjectArrayList::new)) : new ObjectArrayList<>();
-							vehicle.persistentVehicleData.overrideDoorMultiplier(ResourcePackCreatorOperationServlet.getDoorMultiplier());
-						} else if (vehicleResourceCache == null || !vehicle.getTransportMode().continuousMovement && vehicle.isMoving()) {
-							openDoorways = new ObjectArrayList<>();
+							if (vehicleResourceCache != null && fromResourcePackCreator) {
+								if (vehicle.persistentVehicleData.checkCanOpenDoors()) {
+									openDoorways = new ObjectArrayList<>(vehicleResourceCache.doorways.size());
+									vehicleResourceCache.doorways.forEach(doorway -> openDoorways.add(new ObjectDoubleImmutablePair<>(doorway, 0)));
+								} else {
+									openDoorways = new ObjectArrayList<>();
+								}
+								vehicle.persistentVehicleData.overrideDoorMultiplier(ResourcePackCreatorOperationServlet.getDoorMultiplier());
+							} else if (vehicleResourceCache == null || !vehicle.getTransportMode().continuousMovement && vehicle.isMoving()) {
+								openDoorways = new ObjectArrayList<>();
 						} else {
 							final ObjectArrayList<Vector3d> doorHoldingPlayerOffsetPositions = new ObjectArrayList<>();
 							// Check if this player is holding doors
@@ -345,13 +352,13 @@ public class RenderVehicles implements IGui {
 			});
 		});
 
-		if (!OptimizedRenderer.renderingShadows()) {
-			MainRenderer.WORKER_THREAD.scheduleVehicles(occlusionCullingInstance -> {
-				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
-				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
-				minecraftClient.execute(() -> tasks.forEach(Runnable::run));
-			});
-		}
+			if (!OptimizedRenderer.renderingShadows()) {
+				MainRenderer.WORKER_THREAD.scheduleVehicles(occlusionCullingInstance -> {
+					final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>(cullingTasks.size());
+					cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
+					minecraftClient.execute(() -> tasks.forEach(Runnable::run));
+				});
+			}
 	}
 
 	/**
