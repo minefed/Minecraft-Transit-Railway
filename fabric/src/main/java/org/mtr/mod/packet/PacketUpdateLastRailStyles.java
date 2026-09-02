@@ -58,6 +58,8 @@ public final class PacketUpdateLastRailStyles extends PacketHandler {
 
 	public static class Cache {
 
+		private static final ObjectArrayList<String> DEFAULT_RAIL_STYLES = ObjectArrayList.of(CustomResourceLoader.DEFAULT_RAIL_ID);
+		private static final ObjectArrayList<String> DEFAULT_BOAT_STYLES = new ObjectArrayList<>();
 		private final Object2ObjectAVLTreeMap<UUID, Object2ObjectAVLTreeMap<TransportMode, ObjectArrayList<String>>> cache = new Object2ObjectAVLTreeMap<>(); // Cache for last used styles
 
 		/**
@@ -68,7 +70,7 @@ public final class PacketUpdateLastRailStyles extends PacketHandler {
 		 * @return whether the operation was successful (if the rail originally had different styles)
 		 */
 		public boolean canApplyStylesToRail(UUID uuid, Rail rail, boolean modifyRail) {
-			final ObjectArrayList<String> lastStyles = cache.getOrDefault(uuid, getDefaultStyles()).get(rail.getTransportMode());
+			final ObjectArrayList<String> lastStyles = getLastStyles(uuid, rail.getTransportMode());
 			final ObjectImmutableList<String> railStyles = rail.getStyles();
 			if (Utilities.sameItems(lastStyles, railStyles)) {
 				return false;
@@ -85,7 +87,11 @@ public final class PacketUpdateLastRailStyles extends PacketHandler {
 		 * @return a new rail (which is a copy of the supplied rail) with the cached rail styles
 		 */
 		public Rail getRailWithLastStyles(UUID uuid, Rail rail) {
-			return Rail.copy(rail, cache.getOrDefault(uuid, getDefaultStyles()).get(rail.getTransportMode()));
+			return Rail.copy(rail, getLastStyles(uuid, rail.getTransportMode()));
+		}
+
+		public void clear() {
+			cache.clear();
 		}
 
 		/**
@@ -95,6 +101,14 @@ public final class PacketUpdateLastRailStyles extends PacketHandler {
 			final ObjectArrayList<String> existingStyles = cache.computeIfAbsent(uuid, key -> getDefaultStyles()).get(transportMode);
 			existingStyles.clear();
 			existingStyles.addAll(styles.stream().distinct().sorted().collect(Collectors.toCollection(ObjectArrayList::new)));
+		}
+
+		private ObjectArrayList<String> getLastStyles(UUID uuid, TransportMode transportMode) {
+			final Object2ObjectAVLTreeMap<TransportMode, ObjectArrayList<String>> stylesForTransportMode = cache.get(uuid);
+			if (stylesForTransportMode == null) {
+				return transportMode == TransportMode.BOAT ? DEFAULT_BOAT_STYLES : DEFAULT_RAIL_STYLES;
+			}
+			return stylesForTransportMode.get(transportMode);
 		}
 
 		private static Object2ObjectAVLTreeMap<TransportMode, ObjectArrayList<String>> getDefaultStyles() {

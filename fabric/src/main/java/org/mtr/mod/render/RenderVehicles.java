@@ -41,9 +41,9 @@ public class RenderVehicles implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
-		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
-		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
+		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
+		final Vec3d camera = cameraPosition == null ? null : new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 
 		// When riding a moving vehicle, the client movement is always out of sync with the vehicle rendering. This produces annoying shaking effects.
 		// Offsets are used to render the vehicle with respect to the player position rather than the absolute world position, eliminating shaking.
@@ -90,19 +90,21 @@ public class RenderVehicles implements IGui {
 
 			// Iterate all cars of a vehicle
 			iterateWithIndex(vehiclePropertiesList, (carNumber, vehicleCarDetails) -> {
-				cullingTasks.add(occlusionCullingInstance -> {
-					final double longestDimension = vehicle.persistentVehicleData.longestDimensions[carNumber];
-					final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
-							vehicleCarDetails.right().right().position.x - longestDimension,
-							vehicleCarDetails.right().right().position.y - 8,
-							vehicleCarDetails.right().right().position.z - longestDimension
-					), new Vec3d(
-							vehicleCarDetails.right().right().position.x + longestDimension,
-							vehicleCarDetails.right().right().position.y + 8,
-							vehicleCarDetails.right().right().position.z + longestDimension
-					), camera);
-					return () -> vehicle.persistentVehicleData.rayTracing[carNumber] = shouldRender;
-				});
+				if (cullingTasks != null) {
+					cullingTasks.add(occlusionCullingInstance -> {
+						final double longestDimension = vehicle.persistentVehicleData.longestDimensions[carNumber];
+						final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
+								vehicleCarDetails.right().right().position.x - longestDimension,
+								vehicleCarDetails.right().right().position.y - 8,
+								vehicleCarDetails.right().right().position.z - longestDimension
+						), new Vec3d(
+								vehicleCarDetails.right().right().position.x + longestDimension,
+								vehicleCarDetails.right().right().position.y + 8,
+								vehicleCarDetails.right().right().position.z + longestDimension
+						), camera);
+						return () -> vehicle.persistentVehicleData.rayTracing[carNumber] = shouldRender;
+					});
+				}
 
 				if (vehicle.persistentVehicleData.rayTracing[carNumber] || VehicleRidingMovement.isRiding(vehicle.getId())) {
 					CustomResourceLoader.getVehicleById(vehicle.getTransportMode(), vehicleCarDetails.left().getVehicleId(), vehicleResourceDetails -> {
@@ -345,7 +347,7 @@ public class RenderVehicles implements IGui {
 			});
 		});
 
-		if (!OptimizedRenderer.renderingShadows()) {
+		if (cullingTasks != null && !cullingTasks.isEmpty()) {
 			MainRenderer.WORKER_THREAD.scheduleVehicles(occlusionCullingInstance -> {
 				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
 				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));

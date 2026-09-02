@@ -55,4 +55,8 @@ public final class ArrivalsCacheServer extends ArrivalsCache {
 	public static void tickAll() {
 		INSTANCES.forEach((worldId, arrivalsCacheServer) -> arrivalsCacheServer.tick());
 	}
+
+	public static void clear() {
+		INSTANCES.clear();
+	}
 }

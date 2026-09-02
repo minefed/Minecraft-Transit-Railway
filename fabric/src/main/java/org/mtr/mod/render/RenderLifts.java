@@ -28,14 +28,25 @@ import org.mtr.mod.model.ModelSmallCube;
 import org.mtr.mod.resource.LiftResource;
 
 import javax.annotation.Nullable;
+import java.util.LinkedHashMap;
+import java.util.Map;
 import java.util.function.Function;
 
 public class RenderLifts implements IGui {
 
 	private static final int LIFT_DISPLAY_COLOR = 0xFFFF0000;
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier("textures/block/redstone_block.png"));
+	private static final Identifier LIFT_ARROW_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/sign/lift_arrow.png");
 	private static final float LIFT_DOOR_VALUE = 0.75F;
 	private static final float LIFT_FLOOR_PADDING = 0.25F;
+	private static final int MAX_CACHED_LIFT_MODELS = 128;
+	private static final Map<LiftModelKey, ModelLift1> LIFT_MODEL_CACHE = new LinkedHashMap<LiftModelKey, ModelLift1>(16, 0.75F, true) {
+		@Override
+		protected boolean removeEldestEntry(Map.Entry<LiftModelKey, ModelLift1> eldest) {
+			return size() > MAX_CACHED_LIFT_MODELS;
+		}
+	};
+	private static final LiftModelKey LIFT_MODEL_LOOKUP_KEY = new LiftModelKey();
 
 	public static void render(long millisElapsed, Vector3d cameraShakeOffset) {
 		final MinecraftClient minecraftClient = MinecraftClient.getInstance();
@@ -44,10 +55,11 @@ public class RenderLifts implements IGui {
 		if (clientWorld == null || clientPlayerEntity == null) {
 			return;
 		}
+		final World world = new World(clientWorld.data);
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
-		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
-		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
+		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
+		final Vec3d camera = cameraPosition == null ? null : new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 
 		final boolean canRide = !clientPlayerEntity.isSpectator();
 		final boolean isHoldingRefresher = clientPlayerEntity.isHolding(Items.LIFT_REFRESHER.get());
@@ -67,7 +79,7 @@ public class RenderLifts implements IGui {
 						final Position position1 = liftFloor.getPosition();
 						final Position position2 = previousLiftFloor[0].getPosition();
 						MainRenderer.scheduleRender(QueuedRenderLayer.LINES, (graphicsHolder, offset) -> {
-							final ObjectArrayList<Vector> trackPositions = ItemLiftRefresher.findPath(new World(clientWorld.data), position1, position2);
+							final ObjectArrayList<Vector> trackPositions = ItemLiftRefresher.findPath(world, position1, position2);
 							for (int i = 1; i < trackPositions.size(); i++) {
 								graphicsHolder.drawLineInWorld(
 										(float) (trackPositions.get(i - 1).x - offset.getXMapped() + 0.5),
@@ -87,20 +99,22 @@ public class RenderLifts implements IGui {
 			}
 
 			// Calculating vehicle transformations in advance
-			final PositionAndRotation absolutePositionAndRotation = getLiftPositionAndRotation(clientWorld, lift);
-			cullingTasks.add(occlusionCullingInstance -> {
-				final double longestDimension = Math.max(lift.getHeight(), Math.max(lift.getWidth(), lift.getDepth()));
-				final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
-						absolutePositionAndRotation.position.x - longestDimension,
-						absolutePositionAndRotation.position.y - longestDimension,
-						absolutePositionAndRotation.position.z - longestDimension
-				), new Vec3d(
-						absolutePositionAndRotation.position.x + longestDimension,
-						absolutePositionAndRotation.position.y + longestDimension,
-						absolutePositionAndRotation.position.z + longestDimension
-				), camera);
-				return () -> liftWrapper.shouldRender = shouldRender;
-			});
+			final PositionAndRotation absolutePositionAndRotation = getLiftPositionAndRotation(world, lift);
+			if (cullingTasks != null) {
+				cullingTasks.add(occlusionCullingInstance -> {
+					final double longestDimension = Math.max(lift.getHeight(), Math.max(lift.getWidth(), lift.getDepth()));
+					final boolean shouldRender = occlusionCullingInstance.isAABBVisible(new Vec3d(
+							absolutePositionAndRotation.position.x - longestDimension,
+							absolutePositionAndRotation.position.y - longestDimension,
+							absolutePositionAndRotation.position.z - longestDimension
+					), new Vec3d(
+							absolutePositionAndRotation.position.x + longestDimension,
+							absolutePositionAndRotation.position.y + longestDimension,
+							absolutePositionAndRotation.position.z + longestDimension
+					), camera);
+					return () -> liftWrapper.shouldRender = shouldRender;
+				});
+			}
 
 			if (liftWrapper.shouldRender) {
 				// Riding offset
@@ -161,7 +175,7 @@ public class RenderLifts implements IGui {
 
 				// Render the lift
 				final StoredMatrixTransformations storedMatrixTransformations = RenderVehicles.getStoredMatrixTransformations(offsetVector == null, renderingPositionAndRotation, 0);
-				new ModelLift1((int) Math.round(lift.getHeight() * 2), (int) Math.round(lift.getWidth()), (int) Math.round(lift.getDepth()), lift.getIsDoubleSided()).render(
+				getLiftModel(lift).render(
 						storedMatrixTransformations,
 						null,
 						getLiftResource(lift.getStyle()).getTexture(),
@@ -180,7 +194,7 @@ public class RenderLifts implements IGui {
 						}
 						graphicsHolder.translate(0.875F, -1.5, lift.getDepth() / 2 - 0.25 - SMALL_OFFSET);
 					});
-					renderLiftDisplay(storedMatrixTransformationsNew, new World(clientWorld.data), lift, 0.1875F, 0.3125F);
+					renderLiftDisplay(storedMatrixTransformationsNew, world, lift, 0.1875F, 0.3125F);
 				}
 
 				if (canRide) {
@@ -195,7 +209,7 @@ public class RenderLifts implements IGui {
 			}
 		});
 
-		if (!OptimizedRenderer.renderingShadows()) {
+		if (cullingTasks != null && !cullingTasks.isEmpty()) {
 			MainRenderer.WORKER_THREAD.scheduleLifts(occlusionCullingInstance -> {
 				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
 				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
@@ -215,7 +229,7 @@ public class RenderLifts implements IGui {
 		});
 
 		if (liftDirection != LiftDirection.NONE) {
-			MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/sign/lift_arrow.png"), false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
+			MainRenderer.scheduleRender(LIFT_ARROW_TEXTURE, false, QueuedRenderLayer.LIGHT_TRANSLUCENT, (graphicsHolder, offset) -> {
 				storedMatrixTransformations.transform(graphicsHolder, offset);
 				IDrawing.drawTexture(graphicsHolder, -width / 6, 0, width / 3, width / 3, 0, liftDirection == LiftDirection.UP ? 0 : 1, 1, liftDirection == LiftDirection.UP ? 1 : 0, Direction.UP, LIFT_DISPLAY_COLOR, GraphicsHolder.getDefaultLight());
 				graphicsHolder.pop();
@@ -241,25 +255,80 @@ public class RenderLifts implements IGui {
 	}
 
 	public static LiftResource getLiftResource(@Nullable String liftId) {
-		final LiftResource liftResource;
-
-		if (liftId == null) {
-			liftResource = null;
-		} else {
-			final LiftResource[] tempLiftResource = {null};
-			CustomResourceLoader.getLiftById(liftId, newLiftResource -> tempLiftResource[0] = newLiftResource);
-			liftResource = tempLiftResource[0];
-		}
-
-		return liftResource == null ? CustomResourceLoader.getLifts().get(0) : liftResource;
+		final LiftResource liftResource = liftId == null ? null : CustomResourceLoader.getLiftById(liftId);
+		return liftResource == null ? CustomResourceLoader.getDefaultLift() : liftResource;
 	}
 
-	private static PositionAndRotation getLiftPositionAndRotation(ClientWorld clientWorld, Lift lift) {
-		final Vector position = lift.getPosition((floorPosition1, floorPosition2) -> ItemLiftRefresher.findPath(new World(clientWorld.data), floorPosition1, floorPosition2));
+	public static void clearModelCache() {
+		synchronized (LIFT_MODEL_CACHE) {
+			LIFT_MODEL_CACHE.clear();
+		}
+	}
+
+	private static ModelLift1 getLiftModel(Lift lift) {
+		final int height = (int) Math.round(lift.getHeight() * 2);
+		final int width = (int) Math.round(lift.getWidth());
+		final int depth = (int) Math.round(lift.getDepth());
+		final boolean doubleSided = lift.getIsDoubleSided();
+		synchronized (LIFT_MODEL_CACHE) {
+			LIFT_MODEL_LOOKUP_KEY.set(height, width, depth, doubleSided);
+			ModelLift1 modelLift = LIFT_MODEL_CACHE.get(LIFT_MODEL_LOOKUP_KEY);
+			if (modelLift == null) {
+				modelLift = new ModelLift1(height, width, depth, doubleSided);
+				LIFT_MODEL_CACHE.put(new LiftModelKey(height, width, depth, doubleSided), modelLift);
+			}
+			return modelLift;
+		}
+	}
+
+	private static PositionAndRotation getLiftPositionAndRotation(World world, Lift lift) {
+		final Vector position = lift.getPosition((floorPosition1, floorPosition2) -> ItemLiftRefresher.findPath(world, floorPosition1, floorPosition2));
 		return new PositionAndRotation(new Vector(
 				position.x + lift.getOffsetX(),
 				position.y + lift.getOffsetY(),
 				position.z + lift.getOffsetZ()
 		), -Math.PI / 2 - lift.getAngle().angleRadians, 0);
+	}
+
+	private static final class LiftModelKey {
+
+		private int height;
+		private int width;
+		private int depth;
+		private boolean doubleSided;
+
+		private LiftModelKey() {
+		}
+
+		private LiftModelKey(int height, int width, int depth, boolean doubleSided) {
+			set(height, width, depth, doubleSided);
+		}
+
+		private void set(int height, int width, int depth, boolean doubleSided) {
+			this.height = height;
+			this.width = width;
+			this.depth = depth;
+			this.doubleSided = doubleSided;
+		}
+
+		@Override
+		public boolean equals(Object object) {
+			if (this == object) {
+				return true;
+			}
+			if (!(object instanceof LiftModelKey)) {
+				return false;
+			}
+			final LiftModelKey key = (LiftModelKey) object;
+			return height == key.height && width == key.width && depth == key.depth && doubleSided == key.doubleSided;
+		}
+
+		@Override
+		public int hashCode() {
+			int result = height;
+			result = 31 * result + width;
+			result = 31 * result + depth;
+			return 31 * result + (doubleSided ? 1 : 0);
+		}
 	}
 }

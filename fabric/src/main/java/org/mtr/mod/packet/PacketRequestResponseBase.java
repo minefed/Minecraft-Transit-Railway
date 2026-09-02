@@ -50,14 +50,17 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 	}
 
 	protected void runServerOutbound(ServerWorld serverWorld, @Nullable ServerPlayerEntity serverPlayerEntity) {
-		Init.sendMessageC2S(getKey(), serverWorld.getServer(), new World(serverWorld.data), getDataInstance(new JsonReader(Utilities.parseJson(content))), responseType() == ResponseType.NONE ? null : responseData -> {
+		final ResponseType responseType = responseType();
+		Init.sendMessageC2S(getKey(), serverWorld.getServer(), new World(serverWorld.data), getDataInstance(new JsonReader(Utilities.parseJson(content))), responseType == ResponseType.NONE ? null : responseData -> {
 			final JsonObject responseJson = Utilities.getJsonObjectFromData(responseData);
-			if (responseType() == ResponseType.PLAYER) {
+			final String responseContent = responseJson.toString();
+			final PacketRequestResponseBase responsePacket = getInstance(responseContent);
+			if (responseType == ResponseType.PLAYER) {
 				if (serverPlayerEntity != null) {
-					Init.REGISTRY.sendPacketToClient(serverPlayerEntity, getInstance(responseJson.toString()));
+					Init.REGISTRY.sendPacketToClient(serverPlayerEntity, responsePacket);
 				}
 			} else {
-				MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, getInstance(responseJson.toString())));
+				MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, responsePacket));
 			}
 			runServerInbound(serverWorld, responseJson);
 		}, SerializedDataBase.class);

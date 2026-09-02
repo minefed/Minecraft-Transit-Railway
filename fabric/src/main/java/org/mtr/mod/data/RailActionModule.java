@@ -1,7 +1,6 @@
 package org.mtr.mod.data;
 
 import org.mtr.core.data.Rail;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.BlockState;
 import org.mtr.mapping.holder.ServerPlayerEntity;
 import org.mtr.mapping.holder.ServerWorld;
@@ -9,18 +8,21 @@ import org.mtr.mapping.mapper.MinecraftServerHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.packet.PacketBroadcastRailActions;
 
+import java.util.ArrayDeque;
+
 public class RailActionModule {
 
 	private final ServerWorld serverWorld;
-	private final ObjectArrayList<RailAction> railActions = new ObjectArrayList<>();
+	private final ArrayDeque<RailAction> railActions = new ArrayDeque<>();
 
 	public RailActionModule(ServerWorld serverWorld) {
 		this.serverWorld = serverWorld;
 	}
 
 	public void tick() {
-		if (!railActions.isEmpty() && railActions.get(0).build()) {
-			railActions.remove(0);
+		final RailAction railAction = railActions.peekFirst();
+		if (railAction != null && railAction.build()) {
+			railActions.removeFirst();
 			broadcastUpdate();
 		}
 	}
@@ -46,6 +48,7 @@ public class RailActionModule {
 	}
 
 	private void broadcastUpdate() {
-		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketBroadcastRailActions(railActions)));
+		final PacketBroadcastRailActions packet = new PacketBroadcastRailActions(railActions);
+		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntity -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, packet));
 	}
 }

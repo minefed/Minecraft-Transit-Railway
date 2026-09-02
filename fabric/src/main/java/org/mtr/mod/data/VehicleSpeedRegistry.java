@@ -17,6 +17,7 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Map;
+import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Registry that provides vehicle max speeds for server-side access.
@@ -24,14 +25,13 @@ import java.util.Map;
  */
 public class VehicleSpeedRegistry {
 
-	// Map of vehicleId to maxSpeed in m/ms
-	private static final Object2DoubleAVLTreeMap<String> VEHICLE_SPEEDS = new Object2DoubleAVLTreeMap<>();
+	private static final int MAX_RESOLVED_VEHICLE_SPEEDS = 4096;
+	private static final String[] SIZE_SUFFIXES = {"_mini", "_small"};
+	private static final String[] RESOURCE_TYPE_SUFFIXES = {"_trailer", "_cab_1", "_cab_2", "_cab_3", "_head", "_tail", "_middle"};
+	private static final String[] RUNTIME_TYPE_SUFFIXES = {"_cab_1", "_cab_2", "_cab_3", "_trailer", "_head", "_tail", "_middle", "_lht", "_rht"};
+	private static volatile SpeedData speedData = new SpeedData(createVehicleSpeedMap(), false, 0);
+	private static long nextVersion;
 	private static Path configFilePath;
-
-	static {
-		// Default value for unknown vehicles
-		VEHICLE_SPEEDS.defaultReturnValue(-1);
-	}
 
 	/**
 	 * Initialize the registry by loading vehicle data from server config file.
@@ -39,10 +39,12 @@ public class VehicleSpeedRegistry {
 	 *
 	 * @param baseFolder The server run directory (same as passed to Config.init)
 	 */
-	public static void init(File baseFolder) {
-		VEHICLE_SPEEDS.clear();
+	public static synchronized void init(File baseFolder) {
+		final Object2DoubleAVLTreeMap<String> vehicleSpeeds = createVehicleSpeedMap();
 
 		if (baseFolder == null) {
+			configFilePath = null;
+			publish(vehicleSpeeds, false);
 			Init.LOGGER.warn("[MTR-SpeedLimit] Base folder is null, cannot load config");
 			return;
 		}
@@ -55,9 +57,10 @@ public class VehicleSpeedRegistry {
 		}
 
 		// Load config file
-		loadConfigFile();
+		loadConfigFile(vehicleSpeeds);
+		publish(vehicleSpeeds, true);
 
-		Init.LOGGER.info("[MTR-SpeedLimit] Loaded {} vehicle speeds from config", VEHICLE_SPEEDS.size());
+		Init.LOGGER.info("[MTR-SpeedLimit] Loaded {} vehicle speeds from config", vehicleSpeeds.size());
 	}
 
 	/**
@@ -142,13 +145,10 @@ public class VehicleSpeedRegistry {
 	 */
 	private static String extractBaseVehicleId(String fullId) {
 		// Common suffixes and size modifiers to remove
-		final String[] sizeSuffixes = {"_mini", "_small"};
-		final String[] typeSuffixes = {"_trailer", "_cab_1", "_cab_2", "_cab_3", "_head", "_tail", "_middle"};
-
 		String baseId = fullId;
 
 		// Remove size suffix first (e.g., "_small", "_mini")
-		for (String suffix : sizeSuffixes) {
+		for (String suffix : SIZE_SUFFIXES) {
 			if (baseId.contains(suffix)) {
 				baseId = baseId.replace(suffix, "");
 				break;
@@ -156,7 +156,7 @@ public class VehicleSpeedRegistry {
 		}
 
 		// Remove type suffix (e.g., "_cab_1", "_trailer")
-		for (String suffix : typeSuffixes) {
+		for (String suffix : RESOURCE_TYPE_SUFFIXES) {
 			if (baseId.endsWith(suffix)) {
 				baseId = baseId.substring(0, baseId.length() - suffix.length());
 				break;
@@ -169,7 +169,7 @@ public class VehicleSpeedRegistry {
 	/**
 	 * Loads vehicle speeds from the config file.
 	 */
-	private static void loadConfigFile() {
+	private static void loadConfigFile(Object2DoubleAVLTreeMap<String> vehicleSpeeds) {
 		try (InputStreamReader reader = new InputStreamReader(Files.newInputStream(configFilePath), StandardCharsets.UTF_8)) {
 			JsonObject root = JsonParser.parseReader(reader).getAsJsonObject();
 
@@ -187,7 +187,7 @@ public class VehicleSpeedRegistry {
 				if (speedKmh > 0) {
 					// Convert km/h to m/ms
 					double speedMms = speedKmh / 3600.0;
-					VEHICLE_SPEEDS.put(vehicleId, speedMms);
+					vehicleSpeeds.put(vehicleId, speedMms);
 					Init.LOGGER.debug("[MTR-SpeedLimit] Registered {} = {} km/h ({} m/ms)", vehicleId, speedKmh, speedMms);
 				}
 			}
@@ -203,23 +203,29 @@ public class VehicleSpeedRegistry {
 	 * @return The max speed in m/ms, or -1 if not found
 	 */
 	public static double getMaxSpeed(String vehicleId) {
+		return getMaxSpeed(vehicleId, speedData);
+	}
+
+	private static double getMaxSpeed(String vehicleId, SpeedData currentSpeedData) {
 		// Try exact match first
-		double speed = VEHICLE_SPEEDS.getDouble(vehicleId);
+		final double speed = currentSpeedData.vehicleSpeeds.getDouble(vehicleId);
 		if (speed >= 0) {
 			return speed;
 		}
 
 		// Try without the suffix (e.g., "sp1900_cab_1" -> "sp1900")
 		// Vehicle IDs typically have suffixes like _cab_1, _cab_2, _trailer
-		final String baseId = getBaseVehicleId(vehicleId);
-		if (!baseId.equals(vehicleId)) {
-			speed = VEHICLE_SPEEDS.getDouble(baseId);
-			if (speed >= 0) {
-				return speed;
-			}
+		final Double cachedSpeed = currentSpeedData.resolvedVehicleSpeeds.get(vehicleId);
+		if (cachedSpeed != null) {
+			return cachedSpeed;
 		}
-
-		return -1;
+		final String baseId = getBaseVehicleId(vehicleId);
+		final double resolvedSpeed = baseId.equals(vehicleId) ? -1 : currentSpeedData.vehicleSpeeds.getDouble(baseId);
+		if (currentSpeedData.resolvedVehicleSpeeds.size() >= MAX_RESOLVED_VEHICLE_SPEEDS) {
+			currentSpeedData.resolvedVehicleSpeeds.clear();
+		}
+		final Double previousSpeed = currentSpeedData.resolvedVehicleSpeeds.putIfAbsent(vehicleId, resolvedSpeed);
+		return previousSpeed == null ? resolvedSpeed : previousSpeed;
 	}
 
 	/**
@@ -227,15 +233,10 @@ public class VehicleSpeedRegistry {
 	 * For example: "mtr:sp1900_small_cab_1" -> "mtr:sp1900"
 	 */
 	private static String getBaseVehicleId(String vehicleId) {
-		// Size suffixes to strip first (e.g., "_small", "_mini")
-		final String[] sizeSuffixes = {"_mini", "_small"};
-		// Type suffixes to strip (e.g., "_cab_1", "_trailer")
-		final String[] typeSuffixes = {"_cab_1", "_cab_2", "_cab_3", "_trailer", "_head", "_tail", "_middle", "_lht", "_rht"};
-
 		String baseId = vehicleId;
 
 		// First, remove size suffix if present (anywhere in the string, not just at the end)
-		for (final String suffix : sizeSuffixes) {
+		for (final String suffix : SIZE_SUFFIXES) {
 			if (baseId.contains(suffix)) {
 				baseId = baseId.replace(suffix, "");
 				break;
@@ -243,7 +244,7 @@ public class VehicleSpeedRegistry {
 		}
 
 		// Then, remove type suffix if present at the end
-		for (final String suffix : typeSuffixes) {
+		for (final String suffix : RUNTIME_TYPE_SUFFIXES) {
 			if (baseId.endsWith(suffix)) {
 				baseId = baseId.substring(0, baseId.length() - suffix.length());
 				break;
@@ -260,20 +261,23 @@ public class VehicleSpeedRegistry {
 	 * @param vehicleId   The vehicle ID
 	 * @param maxSpeedKmh The max speed in km/h
 	 */
-	public static void registerVehicleSpeed(String vehicleId, double maxSpeedKmh) {
+	public static synchronized void registerVehicleSpeed(String vehicleId, double maxSpeedKmh) {
 		if (maxSpeedKmh > 0) {
-			VEHICLE_SPEEDS.put(vehicleId, maxSpeedKmh / 3600.0);
+			final Object2DoubleAVLTreeMap<String> vehicleSpeeds = copyVehicleSpeedMap(speedData.vehicleSpeeds);
+			vehicleSpeeds.put(vehicleId, maxSpeedKmh / 3600.0);
+			publish(vehicleSpeeds, true);
 		}
 	}
 
 	/**
 	 * Reload the config file. Can be called to hot-reload speeds without server restart.
 	 */
-	public static void reload() {
+	public static synchronized void reload() {
 		if (configFilePath != null && Files.exists(configFilePath)) {
-			VEHICLE_SPEEDS.clear();
-			loadConfigFile();
-			Init.LOGGER.info("[MTR-SpeedLimit] Reloaded {} vehicle speeds from config", VEHICLE_SPEEDS.size());
+			final Object2DoubleAVLTreeMap<String> vehicleSpeeds = createVehicleSpeedMap();
+			loadConfigFile(vehicleSpeeds);
+			publish(vehicleSpeeds, true);
+			Init.LOGGER.info("[MTR-SpeedLimit] Reloaded {} vehicle speeds from config", vehicleSpeeds.size());
 		}
 	}
 
@@ -306,11 +310,12 @@ public class VehicleSpeedRegistry {
 
 		double minSpeed = Double.POSITIVE_INFINITY;
 		boolean found = false;
+		final SpeedData currentSpeedData = speedData;
 		for (VehicleCar vehicleCar : vehicleCars) {
 			if (vehicleCar == null) {
 				continue;
 			}
-			final double speed = getMaxSpeed(vehicleCar.getVehicleId());
+			final double speed = getMaxSpeed(vehicleCar.getVehicleId(), currentSpeedData);
 			if (speed > 0) {
 				minSpeed = Math.min(minSpeed, speed);
 				found = true;
@@ -327,8 +332,8 @@ public class VehicleSpeedRegistry {
 	 * @return JsonObject with vehicleId -> speedKmh mappings
 	 */
 	public static JsonObject getSpeedsAsJson() {
-		JsonObject vehicles = new JsonObject();
-		VEHICLE_SPEEDS.object2DoubleEntrySet().forEach(entry -> {
+		final JsonObject vehicles = new JsonObject();
+		speedData.vehicleSpeeds.object2DoubleEntrySet().forEach(entry -> {
 			vehicles.addProperty(entry.getKey(), entry.getDoubleValue() * 3600.0);
 		});
 		return vehicles;
@@ -340,16 +345,17 @@ public class VehicleSpeedRegistry {
 	 *
 	 * @param vehiclesJson JsonObject with vehicleId -> speedKmh mappings
 	 */
-	public static void loadFromJson(JsonObject vehiclesJson) {
-		VEHICLE_SPEEDS.clear();
+	public static synchronized void loadFromJson(JsonObject vehiclesJson) {
+		final Object2DoubleAVLTreeMap<String> vehicleSpeeds = createVehicleSpeedMap();
 		for (Map.Entry<String, JsonElement> entry : vehiclesJson.entrySet()) {
 			String vehicleId = entry.getKey();
 			double speedKmh = entry.getValue().getAsDouble();
 			if (speedKmh > 0) {
-				VEHICLE_SPEEDS.put(vehicleId, speedKmh / 3600.0);
+				vehicleSpeeds.put(vehicleId, speedKmh / 3600.0);
 			}
 		}
-		Init.LOGGER.info("[MTR-SpeedLimit] Client received {} vehicle speeds from server", VEHICLE_SPEEDS.size());
+		publish(vehicleSpeeds, true);
+		Init.LOGGER.info("[MTR-SpeedLimit] Client received {} vehicle speeds from server", vehicleSpeeds.size());
 	}
 
 	/**
@@ -358,6 +364,50 @@ public class VehicleSpeedRegistry {
 	 * @return true if at least one speed is registered
 	 */
 	public static boolean isInitialized() {
-		return !VEHICLE_SPEEDS.isEmpty();
+		return !speedData.vehicleSpeeds.isEmpty();
+	}
+
+	/**
+	 * @return whether an initial configuration snapshot has been loaded, including an intentionally empty one
+	 */
+	public static boolean isReady() {
+		return speedData.ready;
+	}
+
+	/**
+	 * @return the version of the currently published configuration snapshot
+	 */
+	public static long getVersion() {
+		return speedData.version;
+	}
+
+	private static Object2DoubleAVLTreeMap<String> createVehicleSpeedMap() {
+		final Object2DoubleAVLTreeMap<String> vehicleSpeeds = new Object2DoubleAVLTreeMap<>();
+		vehicleSpeeds.defaultReturnValue(-1);
+		return vehicleSpeeds;
+	}
+
+	private static Object2DoubleAVLTreeMap<String> copyVehicleSpeedMap(Object2DoubleAVLTreeMap<String> source) {
+		final Object2DoubleAVLTreeMap<String> vehicleSpeeds = createVehicleSpeedMap();
+		vehicleSpeeds.putAll(source);
+		return vehicleSpeeds;
+	}
+
+	private static void publish(Object2DoubleAVLTreeMap<String> vehicleSpeeds, boolean ready) {
+		speedData = new SpeedData(vehicleSpeeds, ready, ++nextVersion);
+	}
+
+	private static final class SpeedData {
+
+		private final Object2DoubleAVLTreeMap<String> vehicleSpeeds;
+		private final ConcurrentHashMap<String, Double> resolvedVehicleSpeeds = new ConcurrentHashMap<>();
+		private final boolean ready;
+		private final long version;
+
+		private SpeedData(Object2DoubleAVLTreeMap<String> vehicleSpeeds, boolean ready, long version) {
+			this.vehicleSpeeds = vehicleSpeeds;
+			this.ready = ready;
+			this.version = version;
+		}
 	}
 }

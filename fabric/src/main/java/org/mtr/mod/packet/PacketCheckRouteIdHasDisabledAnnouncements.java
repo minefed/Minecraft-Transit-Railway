@@ -1,6 +1,5 @@
 package org.mtr.mod.packet;
 
-import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.mapping.holder.MinecraftServer;
 import org.mtr.mapping.holder.ServerPlayerEntity;
 import org.mtr.mapping.mapper.PersistenceStateExtension;
@@ -11,7 +10,6 @@ import org.mtr.mod.Init;
 import org.mtr.mod.client.MinecraftClientData;
 import org.mtr.mod.data.PersistentStateData;
 
-import java.util.Random;
 import java.util.function.Consumer;
 
 public final class PacketCheckRouteIdHasDisabledAnnouncements extends PacketHandler {
@@ -20,7 +18,7 @@ public final class PacketCheckRouteIdHasDisabledAnnouncements extends PacketHand
 	private final boolean isDisabled;
 	private final long callbackId;
 
-	private static final Long2ObjectAVLTreeMap<Consumer<Boolean>> CALLBACKS = new Long2ObjectAVLTreeMap<>();
+	private static final PendingCallbackRegistry<Consumer<Boolean>> CALLBACKS = new PendingCallbackRegistry<>();
 
 	public PacketCheckRouteIdHasDisabledAnnouncements(PacketBufferReceiver packetBufferReceiver) {
 		routeId = packetBufferReceiver.readLong();
@@ -31,8 +29,7 @@ public final class PacketCheckRouteIdHasDisabledAnnouncements extends PacketHand
 	public PacketCheckRouteIdHasDisabledAnnouncements(long routeId, Consumer<Boolean> callback) {
 		this.routeId = routeId;
 		isDisabled = false;
-		callbackId = new Random().nextLong();
-		CALLBACKS.put(callbackId, callback);
+		callbackId = CALLBACKS.register(callback);
 	}
 
 	private PacketCheckRouteIdHasDisabledAnnouncements(long routeId, boolean isDisabled, long callbackId) {
@@ -61,5 +58,9 @@ public final class PacketCheckRouteIdHasDisabledAnnouncements extends PacketHand
 		if (callback != null) {
 			callback.accept(isDisabled);
 		}
+	}
+
+	public static void clearCallbacks() {
+		CALLBACKS.clear();
 	}
 }

@@ -3,11 +3,13 @@ package org.mtr.mod.render;
 import org.mtr.core.data.NameColorDataBase;
 import org.mtr.core.data.Station;
 import org.mtr.core.data.StationExit;
-import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
+import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntOpenHashSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.ints.IntObjectImmutablePair;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongOpenHashSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.BlockEntityRenderer;
 import org.mtr.mapping.mapper.GraphicsHolder;
@@ -27,11 +29,17 @@ import org.mtr.mod.screen.EditStationScreen;
 
 import javax.annotation.Nullable;
 import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
+import java.util.WeakHashMap;
 import java.util.stream.Collectors;
 
 public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends BlockEntityRenderer<T> implements IBlock, IGui, IDrawing {
+
+	private static final Identifier WHITE_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/white.png");
+	private static final WeakHashMap<String[], SignLayout> SIGN_LAYOUT_CACHE = new WeakHashMap<>();
+	private static int cachedResourceGeneration = -1;
 
 	public RenderRailwaySign(Argument dispatcher) {
 		super(dispatcher);
@@ -50,26 +58,15 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 			return;
 		}
 		final BlockRailwaySign block = (BlockRailwaySign) state.getBlock().data;
-		if (entity.getSignIds().length != block.length) {
+		final String[] currentSignIds = entity.getSignIds();
+		if (currentSignIds.length != block.length) {
 			return;
 		}
 		final Direction facing = IBlock.getStatePropertySafe(state, BlockStationNameBase.FACING);
-		final String[] signIds = entity.getSignIds();
-
-		boolean renderBackground = false;
-		int backgroundColor = 0;
-		for (final String signId : signIds) {
-			if (signId != null) {
-				final SignResource sign = getSign(signId);
-				if (sign != null) {
-					renderBackground = true;
-					if (sign.getBackgroundColor() != 0) {
-						backgroundColor = sign.getBackgroundColor();
-						break;
-					}
-				}
-			}
-		}
+		final SignLayout signLayout = getSignLayout(currentSignIds);
+		final String[] signIds = signLayout.signIds;
+		final int backgroundColor = signLayout.backgroundColor;
+		final LongAVLTreeSet selectedIds = entity.getSelectedIds();
 
 		final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations(0.5 + entity.getPos2().getX(), 0.53125 + entity.getPos2().getY(), 0.5 + entity.getPos2().getZ());
 		storedMatrixTransformations.add(graphicsHolderNew -> {
@@ -84,27 +81,28 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		graphicsHolder.rotateZDegrees(180);
 		graphicsHolder.translate(block.getXStart() / 16F - 0.5, 0, -0.0625 - SMALL_OFFSET * 2);
 
-		if (renderBackground) {
+		if (signLayout.renderBackground) {
 			final int newBackgroundColor = backgroundColor | ARGB_BLACK;
-			MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/block/white.png"), false, QueuedRenderLayer.LIGHT, (graphicsHolderNew, offset) -> {
+			MainRenderer.scheduleRender(WHITE_TEXTURE, false, QueuedRenderLayer.LIGHT, (graphicsHolderNew, offset) -> {
 				storedMatrixTransformations.transform(graphicsHolderNew, offset);
 				IDrawing.drawTexture(graphicsHolderNew, 0, 0, SMALL_OFFSET, 0.5F * (signIds.length), 0.5F, SMALL_OFFSET, facing, newBackgroundColor, GraphicsHolder.getDefaultLight());
 				graphicsHolderNew.pop();
 			});
 		}
 		for (int i = 0; i < signIds.length; i++) {
-			if (signIds[i] != null) {
+			if (signIds[i] != null && signLayout.signs[i] != null) {
 				drawSign(
 						graphicsHolder,
 						storedMatrixTransformations,
 						pos,
 						signIds[i],
+						signLayout.signs[i],
 						0.5F * i,
 						0,
 						0.5F,
-						getMaxWidth(signIds, i, false),
-						getMaxWidth(signIds, i, true),
-						entity.getSelectedIds(),
+						signLayout.maxWidthsLeft[i],
+						signLayout.maxWidthsRight[i],
+						selectedIds,
 						facing,
 						backgroundColor | ARGB_BLACK,
 						false,
@@ -125,6 +123,10 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		if (sign == null) {
 			return;
 		}
+		drawSign(graphicsHolder, storedMatrixTransformations, pos, signId, sign, x, y, size, maxWidthLeft, maxWidthRight, selectedIds, facing, backgroundColor, isGui, drawTexture);
+	}
+
+	private static void drawSign(GraphicsHolder graphicsHolder, @Nullable StoredMatrixTransformations storedMatrixTransformations, BlockPos pos, String signId, SignResource sign, float x, float y, float size, float maxWidthLeft, float maxWidthRight, LongAVLTreeSet selectedIds, Direction facing, int backgroundColor, boolean isGui, DrawTexture drawTexture) {
 
 		final float signSize = (sign.getSmall() ? BlockRailwaySign.SMALL_SIGN_PERCENTAGE : 1) * size;
 		final float margin = (size - signSize) / 2;
@@ -145,9 +147,11 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 			}
 
 			final ObjectArrayList<StationExit> selectedExitsSorted = new ObjectArrayList<>();
+			final ObjectOpenHashSet<String> selectedExitNames = new ObjectOpenHashSet<>();
+			selectedIds.longStream().forEach(selectedId -> selectedExitNames.add(EditStationScreen.deserializeExit(selectedId)));
 			final ObjectArrayList<StationExit> exits = EditStationScreen.getStationExits(station, true);
 			exits.forEach(exit -> {
-				if (selectedIds.longStream().anyMatch(selectedId -> EditStationScreen.deserializeExit(selectedId).equals(exit.getName()))) {
+				if (selectedExitNames.contains(exit.getName())) {
 					selectedExitsSorted.add(exit);
 				}
 			});
@@ -182,12 +186,12 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				return;
 			}
 
-			final LongAVLTreeSet platformIds = new LongAVLTreeSet();
+			final LongOpenHashSet platformIds = new LongOpenHashSet();
 			station.savedRails.forEach(platform -> platformIds.add(platform.getId()));
 			station.connectedStations.forEach(connectingStation -> connectingStation.savedRails.forEach(platform -> platformIds.add(platform.getId())));
 
 			final ObjectArrayList<IntObjectImmutablePair<String>> selectedRoutesSorted = new ObjectArrayList<>();
-			final IntAVLTreeSet addedColors = new IntAVLTreeSet();
+			final IntOpenHashSet addedColors = new IntOpenHashSet();
 			MinecraftClientData.getInstance().simplifiedRoutes.forEach(simplifiedRoute -> {
 				if (!simplifiedRoute.getName().isEmpty()) {
 					final int color = simplifiedRoute.getColor();
@@ -308,26 +312,112 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 		if (signId == null) {
 			return null;
 		} else {
-			final SignResource[] signResource = {null};
-			CustomResourceLoader.getSignById(signId, newSignResource -> signResource[0] = newSignResource);
-			return signResource[0];
+			return CustomResourceLoader.getSignById(signId);
 		}
 	}
 
 	public static float getMaxWidth(String[] signIds, int index, boolean right) {
-		float maxWidthLeft = 0;
-		for (int i = index + (right ? 1 : -1); right ? i < signIds.length : i >= 0; i += (right ? 1 : -1)) {
-			if (signIds[i] != null) {
-				final SignResource sign = RenderRailwaySign.getSign(signIds[i]);
-				if (sign != null && sign.hasCustomText && right == sign.getFlipCustomText()) {
-					maxWidthLeft /= 2;
-				}
-				return maxWidthLeft;
-			}
-			maxWidthLeft++;
+		if (index < 0 || index >= signIds.length || signIds[index] == null) {
+			return getMaxWidthUncached(signIds, index, right);
 		}
+		final SignLayout signLayout = getSignLayout(signIds);
+		return (right ? signLayout.maxWidthsRight : signLayout.maxWidthsLeft)[index];
+	}
 
-		return maxWidthLeft;
+	private static float getMaxWidthUncached(String[] signIds, int index, boolean right) {
+		float maxWidth = 0;
+		for (int i = index + (right ? 1 : -1); right ? i < signIds.length : i >= 0; i += right ? 1 : -1) {
+			if (signIds[i] != null) {
+				final SignResource sign = getSign(signIds[i]);
+				if (sign != null && sign.hasCustomText && right == sign.getFlipCustomText()) {
+					maxWidth /= 2;
+				}
+				return maxWidth;
+			}
+			maxWidth++;
+		}
+		return maxWidth;
+	}
+
+	private static SignLayout getSignLayout(String[] signIds) {
+		synchronized (SIGN_LAYOUT_CACHE) {
+			final int resourceGeneration = CustomResourceLoader.getResourceReloadGeneration();
+			if (resourceGeneration != cachedResourceGeneration) {
+				SIGN_LAYOUT_CACHE.clear();
+				cachedResourceGeneration = resourceGeneration;
+			}
+			SignLayout signLayout = SIGN_LAYOUT_CACHE.get(signIds);
+			if (signLayout == null || !Arrays.equals(signLayout.signIds, signIds)) {
+				signLayout = new SignLayout(signIds);
+				SIGN_LAYOUT_CACHE.put(signIds, signLayout);
+			}
+			return signLayout;
+		}
+	}
+
+	public static void clearLayoutCache() {
+		synchronized (SIGN_LAYOUT_CACHE) {
+			SIGN_LAYOUT_CACHE.clear();
+			cachedResourceGeneration = CustomResourceLoader.getResourceReloadGeneration();
+		}
+	}
+
+	private static float[] getMaxWidths(String[] signIds, SignResource[] signs, boolean right) {
+		final float[] maxWidths = new float[signIds.length];
+		float emptySlots = 0;
+		SignResource neighboringSign = null;
+		for (int i = right ? signIds.length - 1 : 0; right ? i >= 0 : i < signIds.length; i += right ? -1 : 1) {
+			if (signIds[i] == null) {
+				emptySlots++;
+			} else {
+				maxWidths[i] = neighboringSign != null && neighboringSign.hasCustomText && right == neighboringSign.getFlipCustomText() ? emptySlots / 2 : emptySlots;
+				emptySlots = 0;
+				neighboringSign = signs[i];
+			}
+		}
+		return maxWidths;
+	}
+
+	private static final class SignLayout {
+
+		private final String[] signIds;
+		private final SignResource[] signs;
+		private final float[] maxWidthsLeft;
+		private final float[] maxWidthsRight;
+		private final boolean renderBackground;
+		private final int backgroundColor;
+
+		private SignLayout(String[] signIds) {
+			this.signIds = signIds.clone();
+			signs = new SignResource[signIds.length];
+			boolean hasBackground = false;
+			int foundBackgroundColor = 0;
+			for (int i = 0; i < signIds.length; i++) {
+				final String signId = signIds[i];
+				if (signId != null) {
+					final SignResource sign = getSign(signId);
+					signs[i] = sign;
+					if (sign != null) {
+						hasBackground = true;
+						if (sign.getBackgroundColor() != 0) {
+							foundBackgroundColor = sign.getBackgroundColor();
+							break;
+						}
+					}
+				}
+			}
+			// The old background scan stopped at the first colored sign. Resolve the
+			// remaining entries as well because this layout also caches sign lookup.
+			for (int i = 0; i < signIds.length; i++) {
+				if (signIds[i] != null && signs[i] == null) {
+					signs[i] = getSign(signIds[i]);
+				}
+			}
+			renderBackground = hasBackground;
+			backgroundColor = foundBackgroundColor;
+			maxWidthsLeft = getMaxWidths(this.signIds, signs, false);
+			maxWidthsRight = getMaxWidths(this.signIds, signs, true);
+		}
 	}
 
 	@FunctionalInterface

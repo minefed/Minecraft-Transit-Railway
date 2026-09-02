@@ -11,8 +11,12 @@ import org.mtr.mapping.mapper.ResourceManagerHelper;
 import org.mtr.mod.Init;
 import org.mtr.mod.Keys;
 import org.mtr.mod.config.Config;
+import org.mtr.mod.render.RenderLifts;
+import org.mtr.mod.render.RenderPIDS;
+import org.mtr.mod.render.RenderRailwaySign;
 import org.mtr.mod.resource.*;
 
+import javax.annotation.Nullable;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
@@ -25,6 +29,7 @@ import java.util.stream.Collectors;
 public class CustomResourceLoader {
 
 	private static long TEST_DURATION;
+	private static volatile int resourceReloadGeneration;
 
 	private static final ResourceProvider RESOURCE_PROVIDER = new ResourceProvider() {
 		@Override
@@ -45,6 +50,7 @@ public class CustomResourceLoader {
 	public static final String DEFAULT_RAIL_3D_ID = "default_3d";
 	public static final String DEFAULT_RAIL_3D_SIDING_ID = "default_3d_siding";
 	public static final String DEFAULT_LIFT_TRANSPARENT_ID = "default_transparent";
+	private static final TransportMode[] TRANSPORT_MODES = TransportMode.values();
 
 	private static final Object2ObjectAVLTreeMap<String, String> RESOURCE_CACHE = new Object2ObjectAVLTreeMap<>();
 	private static final Object2ObjectAVLTreeMap<TransportMode, ObjectArrayList<VehicleResource>> VEHICLES = new Object2ObjectAVLTreeMap<>();
@@ -62,7 +68,7 @@ public class CustomResourceLoader {
 	private static final Object2ObjectAVLTreeMap<String, LiftResource> LIFTS_CACHE = new Object2ObjectAVLTreeMap<>();
 
 	static {
-		for (final TransportMode transportMode : TransportMode.values()) {
+		for (final TransportMode transportMode : TRANSPORT_MODES) {
 			VEHICLES.put(transportMode, new ObjectArrayList<>());
 			VEHICLES_CACHE.put(transportMode, new Object2ObjectAVLTreeMap<>());
 			VEHICLES_TAGS.put(transportMode, new Object2ObjectAVLTreeMap<>());
@@ -70,6 +76,9 @@ public class CustomResourceLoader {
 	}
 
 	public static void reload() {
+		RenderLifts.clearModelCache();
+		RenderPIDS.clearTextWidthCache();
+		RenderRailwaySign.clearLayoutCache();
 		MINECRAFT_MODEL_RESOURCES.clear();
 		MINECRAFT_TEXTURE_RESOURCES.clear();
 		RESOURCE_CACHE.clear();
@@ -196,6 +205,7 @@ public class CustomResourceLoader {
 		if (preloadedObjectCount[0] > 0) {
 			Init.LOGGER.info("Preloaded {} objects in {} ms", preloadedObjectCount[0], time4 - time3);
 		}
+		resourceReloadGeneration++;
 	}
 
 	public static void iterateVehicles(TransportMode transportMode, Consumer<VehicleResource> consumer) {
@@ -203,7 +213,7 @@ public class CustomResourceLoader {
 	}
 
 	public static void clearCustomVehicles(String vehicleId) {
-		for (final TransportMode transportMode : TransportMode.values()) {
+		for (final TransportMode transportMode : TRANSPORT_MODES) {
 			final ObjectArrayList<String> vehicleIdsToRemove = new ObjectArrayList<>();
 			VEHICLES_CACHE.get(transportMode).values().forEach(vehicleResourceDetails -> {
 				final VehicleResource vehicleResource = vehicleResourceDetails.left();
@@ -262,10 +272,15 @@ public class CustomResourceLoader {
 	}
 
 	public static void getSignById(String signId, Consumer<SignResource> ifPresent) {
-		final SignResource signResource = SIGNS_CACHE.get(signId);
+		final SignResource signResource = getSignById(signId);
 		if (signResource != null) {
 			ifPresent.accept(signResource);
 		}
+	}
+
+	@Nullable
+	public static SignResource getSignById(String signId) {
+		return SIGNS_CACHE.get(signId);
 	}
 
 	public static ObjectArrayList<String> getSortedSignIds() {
@@ -277,10 +292,15 @@ public class CustomResourceLoader {
 	}
 
 	public static void getRailById(String railId, Consumer<RailResource> ifPresent) {
-		final RailResource railResource = RAILS_CACHE.get(railId);
+		final RailResource railResource = getRailById(railId);
 		if (railResource != null) {
 			ifPresent.accept(railResource);
 		}
+	}
+
+	@Nullable
+	public static RailResource getRailById(String railId) {
+		return RAILS_CACHE.get(railId);
 	}
 
 	public static ObjectImmutableList<ObjectResource> getObjects() {
@@ -299,10 +319,23 @@ public class CustomResourceLoader {
 	}
 
 	public static void getLiftById(String liftId, Consumer<LiftResource> ifPresent) {
-		final LiftResource liftResource = LIFTS_CACHE.get(liftId);
+		final LiftResource liftResource = getLiftById(liftId);
 		if (liftResource != null) {
 			ifPresent.accept(liftResource);
 		}
+	}
+
+	@Nullable
+	public static LiftResource getLiftById(String liftId) {
+		return LIFTS_CACHE.get(liftId);
+	}
+
+	public static LiftResource getDefaultLift() {
+		return LIFTS.get(0);
+	}
+
+	public static int getResourceReloadGeneration() {
+		return resourceReloadGeneration;
 	}
 
 	public static void incrementTestDuration(long duration) {

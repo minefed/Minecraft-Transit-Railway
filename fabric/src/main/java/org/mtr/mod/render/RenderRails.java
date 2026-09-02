@@ -38,7 +38,6 @@ import org.mtr.mod.resource.RailResource;
 
 import javax.annotation.Nullable;
 import java.util.Collections;
-import java.util.function.BooleanSupplier;
 import java.util.function.Function;
 
 public class RenderRails implements IGui {
@@ -49,6 +48,10 @@ public class RenderRails implements IGui {
 	private static final Identifier RAIL_TEXTURE = new Identifier("textures/block/rail.png");
 	private static final Identifier WOOL_TEXTURE = new Identifier("textures/block/white_wool.png");
 	private static final Identifier ONE_WAY_RAIL_ARROW_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/one_way_rail_arrow.png");
+	private static final Property<Boolean> NODE_CONNECTED_PROPERTY = new Property<>(BlockNode.IS_CONNECTED.data);
+	private static final Property<Boolean> NODE_FACING_PROPERTY = new Property<>(BlockNode.FACING.data);
+	private static final Property<Boolean> NODE_45_PROPERTY = new Property<>(BlockNode.IS_45.data);
+	private static final Property<Boolean> NODE_22_5_PROPERTY = new Property<>(BlockNode.IS_22_5.data);
 	private static final int INVALID_NODE_CHECK_RADIUS = 16;
 	private static final double LIGHT_REFERENCE_OFFSET = 0.1;
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier(Init.MOD_ID, "textures/block/white.png"));
@@ -62,18 +65,20 @@ public class RenderRails implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = new ObjectArrayList<>();
-		final Vector3d cameraPosition = minecraftClient.getGameRendererMapped().getCamera().getPos();
-		final Vec3d camera = new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
+		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
+		final Vec3d camera = cameraPosition == null ? null : new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 		final boolean holdingRailRelated = isHoldingRailRelated(clientPlayerEntity);
 
 		// Finding visible rails
 		final ObjectArrayList<Rail> railsToRender = new ObjectArrayList<>();
 		MinecraftClientData.getInstance().railWrapperList.values().forEach(railWrapper -> {
-			cullingTasks.add(occlusionCullingInstance -> {
-				final boolean shouldRender = occlusionCullingInstance.isAABBVisible(railWrapper.startVector, railWrapper.endVector, camera);
-				return () -> railWrapper.shouldRender = shouldRender;
-			});
+			if (cullingTasks != null) {
+				cullingTasks.add(occlusionCullingInstance -> {
+					final boolean shouldRender = occlusionCullingInstance.isAABBVisible(railWrapper.startVector, railWrapper.endVector, camera);
+					return () -> railWrapper.shouldRender = shouldRender;
+				});
+			}
 			if (railWrapper.shouldRender) {
 				railsToRender.add(railWrapper.getRail());
 			}
@@ -104,7 +109,7 @@ public class RenderRails implements IGui {
 		}
 
 		// Ghost rail (when building rail)
-		final ItemStack itemStack = getStackInHand();
+		final ItemStack itemStack = getStackInHand(clientPlayerEntity);
 		final Item item = itemStack.getItem();
 		if (item.data instanceof ItemRailModifier) {
 			final HitResult hitResult = minecraftClient.getCrosshairTargetMapped();
@@ -185,25 +190,30 @@ public class RenderRails implements IGui {
 		});
 
 		if (holdingRailRelated) {
+			final MinecraftClientData minecraftClientData = MinecraftClientData.getInstance();
 			// Render nodes
-			MinecraftClientData.getInstance().positionsToRail.keySet().forEach(position -> {
+			minecraftClientData.positionsToRail.keySet().forEach(position -> {
 				final BlockPos blockPos = Init.positionToBlockPos(position);
-				renderNode(clientWorld.getBlockState(blockPos), blockPos, () -> true, GraphicsHolder.getDefaultLight());
+				renderNode(clientWorld.getBlockState(blockPos), blockPos, GraphicsHolder.getDefaultLight());
 			});
 
 			// Render nodes with the connected block state but isn't actually connected
+			final BlockPos playerBlockPos = clientPlayerEntity.getBlockPos();
+			final int flashingLight = MainRenderer.getFlashingLight();
 			for (int x = -INVALID_NODE_CHECK_RADIUS; x <= INVALID_NODE_CHECK_RADIUS; x++) {
 				for (int y = -INVALID_NODE_CHECK_RADIUS; y <= INVALID_NODE_CHECK_RADIUS; y++) {
 					for (int z = -INVALID_NODE_CHECK_RADIUS; z <= INVALID_NODE_CHECK_RADIUS; z++) {
-						final BlockPos blockPos = clientPlayerEntity.getBlockPos().add(x, y, z);
+						final BlockPos blockPos = playerBlockPos.add(x, y, z);
 						final BlockState blockState = clientWorld.getBlockState(blockPos);
-						renderNode(blockState, blockPos, () -> blockState.get(new Property<>(BlockNode.IS_CONNECTED.data)) && !MinecraftClientData.getInstance().positionsToRail.containsKey(Init.blockPosToPosition(blockPos)), MainRenderer.getFlashingLight());
+						if (blockState.getBlock().data instanceof BlockNode && blockState.get(NODE_CONNECTED_PROPERTY) && !minecraftClientData.positionsToRail.containsKey(Init.blockPosToPosition(blockPos))) {
+							renderNode(blockState, blockPos, flashingLight);
+						}
 					}
 				}
 			}
 		}
 
-		if (!OptimizedRenderer.renderingShadows()) {
+		if (cullingTasks != null && !cullingTasks.isEmpty()) {
 			MainRenderer.WORKER_THREAD.scheduleMTRRails(occlusionCullingInstance -> {
 				final ObjectArrayList<Runnable> tasks = new ObjectArrayList<>();
 				cullingTasks.forEach(occlusionCullingInstanceRunnableFunction -> tasks.add(occlusionCullingInstanceRunnableFunction.apply(occlusionCullingInstance)));
@@ -254,21 +264,24 @@ public class RenderRails implements IGui {
 				renderType[0] = true;
 			} else {
 				final boolean flip = newStyle.endsWith("_2");
-				CustomResourceLoader.getRailById(RailResource.getIdWithoutDirection(newStyle), railResource -> renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
-					final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
-					final double differenceX = x3 - x1;
-					final double differenceZ = z3 - z1;
-					final double yaw = Math.atan2(differenceZ, differenceX);
-					final double pitch = Math.atan2(y2 - y1, Math.sqrt(differenceX * differenceX + differenceZ * differenceZ));
-					final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations((x1 + x3) / 2, (y1 + y2) / 2 + railResource.getModelYOffset(), (z1 + z3) / 2);
-					storedMatrixTransformations.add(graphicsHolder -> {
-						graphicsHolder.rotateYRadians((float) (Math.PI / 2 - yaw + (flip ? Math.PI : 0)));
-						graphicsHolder.rotateXRadians((float) (Math.PI - pitch * (flip ? -1 : 1)));
-						graphicsHolder.rotateZDegrees((float) ((x1 * z1) % 10) / 100);
-					});
-					railResource.render(storedMatrixTransformations, light);
-					renderType[1] = true;
-				}, railResource.getRepeatInterval(), 0, 0));
+				final RailResource railResource = CustomResourceLoader.getRailById(RailResource.getIdWithoutDirection(newStyle));
+				if (railResource != null) {
+					renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
+						final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+						final double differenceX = x3 - x1;
+						final double differenceZ = z3 - z1;
+						final double yaw = Math.atan2(differenceZ, differenceX);
+						final double pitch = Math.atan2(y2 - y1, Math.sqrt(differenceX * differenceX + differenceZ * differenceZ));
+						final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations((x1 + x3) / 2, (y1 + y2) / 2 + railResource.getModelYOffset(), (z1 + z3) / 2);
+						storedMatrixTransformations.add(graphicsHolder -> {
+							graphicsHolder.rotateYRadians((float) (Math.PI / 2 - yaw + (flip ? Math.PI : 0)));
+							graphicsHolder.rotateXRadians((float) (Math.PI - pitch * (flip ? -1 : 1)));
+							graphicsHolder.rotateZDegrees((float) ((x1 * z1) % 10) / 100);
+						});
+						railResource.render(storedMatrixTransformations, light);
+						renderType[1] = true;
+					}, railResource.getRepeatInterval(), 0, 0);
+				}
 			}
 		}
 
@@ -292,13 +305,13 @@ public class RenderRails implements IGui {
 		final IntArrayList colors = new IntArrayList(rail.getSignalColors());
 		Collections.sort(colors);
 		final float width = 1F / 16;
-		final LongArrayList preBlockedSignalColors = MinecraftClientData.getInstance().railIdToPreBlockedSignalColors.getOrDefault(rail.getHexId(), new LongArrayList());
-		final LongArrayList currentlyBlockedSignalColors = MinecraftClientData.getInstance().railIdToCurrentlyBlockedSignalColors.getOrDefault(rail.getHexId(), new LongArrayList());
+		final LongArrayList preBlockedSignalColors = MinecraftClientData.getInstance().railIdToPreBlockedSignalColors.get(rail.getHexId());
+		final LongArrayList currentlyBlockedSignalColors = MinecraftClientData.getInstance().railIdToCurrentlyBlockedSignalColors.get(rail.getHexId());
 
 		for (int i = 0; i < colors.size(); i++) {
 			final int rawColor = colors.getInt(i);
-			final boolean preBlocked = preBlockedSignalColors.contains(rawColor);
-			final boolean currentlyBlocked = currentlyBlockedSignalColors.contains(rawColor);
+			final boolean preBlocked = preBlockedSignalColors != null && preBlockedSignalColors.contains(rawColor);
+			final boolean currentlyBlocked = currentlyBlockedSignalColors != null && currentlyBlockedSignalColors.contains(rawColor);
 			final boolean shouldFlash = preBlocked || currentlyBlocked;
 			final int color = shouldFlash ? MainRenderer.getFlashingColor(rawColor, currentlyBlocked ? 1 : 4) : ARGB_BLACK | rawColor;
 			final float u1 = width * i + 1 - width * colors.size() / 2;
@@ -318,28 +331,33 @@ public class RenderRails implements IGui {
 		final Camera camera = MinecraftClient.getInstance().getGameRendererMapped().getCamera();
 		final Vector3d cameraPosition = camera.getPos();
 		final int renderDistance = MinecraftClientHelper.getRenderDistance() * 16;
+		final double cameraX = cameraPosition.getXMapped();
+		final double cameraZ = cameraPosition.getZMapped();
+		final float cameraYaw = (float) Math.toRadians(camera.getYaw());
+		final float cameraPitch = (float) Math.toRadians(camera.getPitch());
 
 		rail.railMath.render((x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
-			final BlockPos blockPos = Init.newBlockPos(x1, y1 + LIGHT_REFERENCE_OFFSET, z1);
-			final double distanceToCamera = new Vector3d(x1, 0, z1).distanceTo(new Vector3d(cameraPosition.getXMapped(), 0, cameraPosition.getZMapped())); // Minecraft does not have vertical render distance, no need to compare the Y-axis.
+			final double differenceX = x1 - cameraX;
+			final double differenceZ = z1 - cameraZ;
+			final double distanceToCamera = Math.sqrt(differenceX * differenceX + differenceZ * differenceZ); // Minecraft does not have vertical render distance, no need to compare the Y-axis.
 			if (distanceToCamera <= renderDistance) {
 				if (distanceToCamera < 32) {
-					callback.renderRail(blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
+					callback.renderRail(Init.newBlockPos(x1, y1 + LIGHT_REFERENCE_OFFSET, z1), x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
 				} else {
-					final Vector3d rotatedVector = new Vector3d(x1, y1, z1).subtract(cameraPosition).rotateY((float) Math.toRadians(camera.getYaw())).rotateX((float) Math.toRadians(camera.getPitch()));
+					final Vector3d rotatedVector = new Vector3d(differenceX, y1 - cameraPosition.getYMapped(), differenceZ).rotateY(cameraYaw).rotateX(cameraPitch);
 					if (rotatedVector.getZMapped() > 0) {
-						callback.renderRail(blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
+						callback.renderRail(Init.newBlockPos(x1, y1 + LIGHT_REFERENCE_OFFSET, z1), x1, z1, x2, z2, x3, z3, x4, z4, y1, y2);
 					}
 				}
 			}
 		}, interval, offsetRadius1, offsetRadius2);
 	}
 
-	private static void renderNode(BlockState blockState, BlockPos blockPos, BooleanSupplier shouldRender, int light) {
-		if (blockState.getBlock().data instanceof BlockNode && shouldRender.getAsBoolean()) {
+	private static void renderNode(BlockState blockState, BlockPos blockPos, int light) {
+		if (blockState.getBlock().data instanceof BlockNode) {
 			final StoredMatrixTransformations storedMatrixTransformations = new StoredMatrixTransformations(blockPos.getX() + 0.5, blockPos.getY(), blockPos.getZ() + 0.5);
 			storedMatrixTransformations.add(graphicsHolder -> {
-				graphicsHolder.rotateYDegrees((blockState.get(new Property<>(BlockNode.FACING.data)) ? -90 : 0) + (blockState.get(new Property<>(BlockNode.IS_45.data)) ? -45 : 0) + (blockState.get(new Property<>(BlockNode.IS_22_5.data)) ? -22.5F : 0));
+				graphicsHolder.rotateYDegrees((blockState.get(NODE_FACING_PROPERTY) ? -90 : 0) + (blockState.get(NODE_45_PROPERTY) ? -45 : 0) + (blockState.get(NODE_22_5_PROPERTY) ? -22.5F : 0));
 				graphicsHolder.scale(4, 0.5F, 0.5F);
 				graphicsHolder.translate(-0.5, 0, -0.5);
 			});
@@ -404,13 +422,10 @@ public class RenderRails implements IGui {
 		return newLine - 1;
 	}
 
-	private static ItemStack getStackInHand() {
-		final ClientPlayerEntity clientPlayerEntity = MinecraftClient.getInstance().getPlayerMapped();
-		if (clientPlayerEntity != null) {
-			try {
-				return clientPlayerEntity.getStackInHand(clientPlayerEntity.getActiveHand());
-			} catch (Exception ignored) {
-			}
+	private static ItemStack getStackInHand(ClientPlayerEntity clientPlayerEntity) {
+		try {
+			return clientPlayerEntity.getStackInHand(clientPlayerEntity.getActiveHand());
+		} catch (Exception ignored) {
 		}
 		return ItemStack.getEmptyMapped();
 	}

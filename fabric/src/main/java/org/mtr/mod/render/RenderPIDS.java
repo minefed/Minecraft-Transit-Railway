@@ -7,7 +7,9 @@ import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongCollection;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mapping.holder.Direction;
 import org.mtr.mapping.holder.Vector3d;
@@ -31,10 +33,17 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 	private final float maxWidth;
 	private final boolean rotate90;
 	private final float textPadding;
+	private String cachedWrappedText;
+	private float cachedWrappedTextWidth = Float.NaN;
+	private ObjectArrayList<String> cachedWrappedLines;
+	private int cachedWrappedTextGeneration = -1;
 
 	public static final int SWITCH_LANGUAGE_TICKS = 60;
 	private static final int STATIONS_PER_PAGE = 10;
 	private static final int SWITCH_PAGE_TICKS = 120;
+	private static final int MAX_TEXT_WIDTH_CACHE_SIZE = 4096;
+	private static final Object2IntOpenHashMap<String> TEXT_WIDTH_CACHE = new Object2IntOpenHashMap<>();
+	private static volatile int textWidthCacheGeneration;
 
 	public RenderPIDS(Argument dispatcher, float startX, float startY, float startZ, float maxHeight, int maxWidth, boolean rotate90, float textPadding) {
 		super(dispatcher);
@@ -106,10 +115,10 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		final boolean hasDifferentCarLengths = hasDifferentCarLengths(arrivalResponseList);
 		final boolean isSingleArrival = entity instanceof BlockPIDSVerticalSingleArrival1.BlockEntity;
 		final int arrivalsPerPage = isSingleArrival ? 1 : entity.alternateLines() ? entity.maxArrivals / 2 : entity.maxArrivals;
+		final int languageTicks = (int) Math.floor(InitClient.getGameTick()) / SWITCH_LANGUAGE_TICKS;
 		int arrivalIndex = entity.getDisplayPage() * arrivalsPerPage;
 
 		for (int i = 0; i < entity.maxArrivals; i++) {
-			final int languageTicks = (int) Math.floor(InitClient.getGameTick()) / SWITCH_LANGUAGE_TICKS;
 			final ArrivalResponse arrivalResponse;
 			final String customMessage = entity.getMessage(i);
 			final String[] destinationSplit;
@@ -143,13 +152,13 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 						int destinationIndex = 0;
 						int numberIndex = 0;
 						final ObjectArrayList<String> newDestinations = new ObjectArrayList<>();
+						final ObjectOpenHashSet<String> addedDestinations = new ObjectOpenHashSet<>();
 						while (true) {
-							final String newDestination = String.format("%s %s", tempNumberSplit[numberIndex % tempNumberSplit.length], tempDestinationSplit[destinationIndex % tempDestinationSplit.length]);
-							if (newDestinations.contains(newDestination)) {
+							final String newDestination = tempNumberSplit[numberIndex % tempNumberSplit.length] + " " + tempDestinationSplit[destinationIndex % tempDestinationSplit.length];
+							if (!addedDestinations.add(newDestination)) {
 								break;
-							} else {
-								newDestinations.add(newDestination);
 							}
+							newDestinations.add(newDestination);
 							destinationIndex++;
 							numberIndex++;
 						}
@@ -215,7 +224,7 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 						final ObjectArrayList<String> lines = new ObjectArrayList<>();
 
 						if (stations.isEmpty()) {
-							lines.addAll(wrapLines((isCjk ? TranslationProvider.GUI_MTR_TERMINATES_HERE_CJK : TranslationProvider.GUI_MTR_TERMINATES_HERE).getString(), maxWidth * scale / 16));
+							lines.addAll(getWrappedLines((isCjk ? TranslationProvider.GUI_MTR_TERMINATES_HERE_CJK : TranslationProvider.GUI_MTR_TERMINATES_HERE).getString(), maxWidth * scale / 16));
 						} else {
 							final int callingAtMaxPages = (int) Math.max(Math.ceil(stations.size() / (float) STATIONS_PER_PAGE), 1);
 							final int callingAtPage = callingAtMaxPages == 1 ? 0 : (int) Math.floor(InitClient.getGameTick() / SWITCH_PAGE_TICKS) % callingAtMaxPages;
@@ -280,7 +289,7 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 
 	private void renderText(GraphicsHolder graphicsHolder, String text, int color, float availableWidth, HorizontalAlignment horizontalAlignment) {
 		graphicsHolder.push();
-		final int textWidth = GraphicsHolder.getTextWidth(text);
+		final int textWidth = getTextWidthCached(text);
 		if (availableWidth < textWidth) {
 			graphicsHolder.scale(textWidth == 0 ? 1 : availableWidth / textWidth, 1, 1);
 		}
@@ -300,14 +309,17 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		return false;
 	}
 
-	private static ObjectArrayList<String> wrapLines(String text, float availableWidth) {
+	private ObjectArrayList<String> getWrappedLines(String text, float availableWidth) {
+		if (text.equals(cachedWrappedText) && Float.compare(availableWidth, cachedWrappedTextWidth) == 0 && cachedWrappedLines != null && cachedWrappedTextGeneration == textWidthCacheGeneration) {
+			return cachedWrappedLines;
+		}
 		final ObjectArrayList<String> lines = new ObjectArrayList<>();
 		final String[] textSplit = text.split("\\s");
 		String tempText = "";
 
 		for (final String textPart : textSplit) {
 			final String newText = tempText + " " + textPart;
-			if (!tempText.isEmpty() && GraphicsHolder.getTextWidth(newText) > availableWidth) {
+			if (!tempText.isEmpty() && getTextWidthCached(newText) > availableWidth) {
 				lines.add(tempText);
 				tempText = textPart;
 			} else {
@@ -316,6 +328,27 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		}
 
 		lines.add(tempText);
-		return lines;
+		cachedWrappedText = text;
+		cachedWrappedTextWidth = availableWidth;
+		cachedWrappedLines = lines;
+		cachedWrappedTextGeneration = textWidthCacheGeneration;
+		return cachedWrappedLines;
+	}
+
+	public static void clearTextWidthCache() {
+		TEXT_WIDTH_CACHE.clear();
+		textWidthCacheGeneration++;
+	}
+
+	private static int getTextWidthCached(String text) {
+		if (TEXT_WIDTH_CACHE.containsKey(text)) {
+			return TEXT_WIDTH_CACHE.getInt(text);
+		}
+		final int width = GraphicsHolder.getTextWidth(text);
+		if (TEXT_WIDTH_CACHE.size() >= MAX_TEXT_WIDTH_CACHE_SIZE) {
+			TEXT_WIDTH_CACHE.clear();
+		}
+		TEXT_WIDTH_CACHE.put(text, width);
+		return width;
 	}
 }

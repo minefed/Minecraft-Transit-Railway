@@ -57,7 +57,7 @@ public final class PacketSyncSpeedLimits extends PacketHandler {
 	 * Send speed limits to a specific player (e.g., when they join).
 	 */
 	public static void sendToPlayer(ServerPlayerEntity serverPlayerEntity) {
-		if (VehicleSpeedRegistry.isInitialized()) {
+		if (VehicleSpeedRegistry.isReady()) {
 			Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketSyncSpeedLimits());
 		}
 	}

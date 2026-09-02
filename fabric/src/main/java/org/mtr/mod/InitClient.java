@@ -30,6 +30,8 @@ import org.mtr.mod.generated.WebserverResources;
 import org.mtr.mod.generated.lang.TranslationProvider;
 import org.mtr.mod.item.ItemBlockClickingBase;
 import org.mtr.mod.item.ItemDriverKey;
+import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
+import org.mtr.mod.packet.PacketFetchArrivals;
 import org.mtr.mod.packet.PacketRequestData;
 import org.mtr.mod.render.*;
 import org.mtr.mod.resource.CachedResource;
@@ -392,6 +394,8 @@ public final class InitClient {
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerClientDisconnect(() -> {
+			PacketFetchArrivals.clearCallbacks();
+			PacketCheckRouteIdHasDisabledAnnouncements.clearCallbacks();
 			if (webserver != null) {
 				webserver.stop();
 				webserver = null;

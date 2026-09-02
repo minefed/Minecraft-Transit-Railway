@@ -556,7 +556,12 @@ public final class VehicleResource extends VehicleResourceSchema {
 				final OptimizedModelWrapper optimizedModel2;
 				final ObjectArrayList<OptimizedModelWrapper.ObjModelWrapper> objModels = objModelsModel.get(partCondition);
 				optimizedModel2 = objModels == null ? null : OptimizedModelWrapper.fromObjModels(objModels);
-				optimizedModels.put(partCondition, new OptimizedModelWrapper(optimizedModel1, optimizedModel2));
+				final OptimizedModelWrapper optimizedModel = new OptimizedModelWrapper(optimizedModel1, optimizedModel2);
+				// An empty wrapper makes queue() schedule a matrix callback that can never
+				// submit geometry. Omitting it has identical output and avoids per-car work.
+				if (optimizedModel.optimizedModel != null) {
+					optimizedModels.put(partCondition, optimizedModel);
+				}
 			}
 
 			CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.finishReload();

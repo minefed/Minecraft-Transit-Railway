@@ -67,7 +67,8 @@ public final class PacketUpdateData extends PacketRequestResponseBase {
 	}
 
 	public static void sendDirectlyToClientDepotUpdate(ServerWorld serverWorld, UpdateDataResponse updateDataResponse) {
-		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, new PacketUpdateData(Utilities.getJsonObjectFromData(updateDataResponse).toString())));
+		final PacketUpdateData packet = new PacketUpdateData(Utilities.getJsonObjectFromData(updateDataResponse).toString());
+		MinecraftServerHelper.iteratePlayers(serverWorld, serverPlayerEntityNew -> Init.REGISTRY.sendPacketToClient(serverPlayerEntityNew, packet));
 	}
 
 	private static void update(JsonReader jsonReader) {
