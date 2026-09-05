@@ -177,6 +177,7 @@ public final class Init implements Utilities {
 
 		// Register events
 		REGISTRY.eventRegistry.registerServerStarted(minecraftServer -> {
+			PacketCodecCapabilities.resetServer();
 			// Start up the backend
 			RAIL_ACTION_MODULES.clear();
 			WORLD_INDICES.clear();
@@ -244,6 +245,7 @@ public final class Init implements Utilities {
 				WORLD_ID_LIST.clear();
 				RIDING_PLAYERS.clear();
 				ArrivalsCacheServer.clear();
+				PacketCodecCapabilities.resetServer();
 				PacketUpdateLastRailStyles.SERVER_CACHE.clear();
 			}
 		});
@@ -291,7 +293,10 @@ public final class Init implements Utilities {
 			// Sync vehicle speed limits to the joining player
 			PacketSyncSpeedLimits.sendToPlayer(serverPlayerEntity);
 		});
-		REGISTRY.eventRegistry.registerPlayerDisconnect((minecraftServer, serverPlayerEntity) -> RIDING_PLAYERS.remove(serverPlayerEntity.getUuid()));
+		REGISTRY.eventRegistry.registerPlayerDisconnect((minecraftServer, serverPlayerEntity) -> {
+			RIDING_PLAYERS.remove(serverPlayerEntity.getUuid());
+			PacketCodecCapabilities.removeClient(serverPlayerEntity.getUuid());
+		});
 
 		// Finish registration
 		REGISTRY.init();

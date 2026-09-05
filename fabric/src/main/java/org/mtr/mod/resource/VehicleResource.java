@@ -24,6 +24,7 @@ import org.mtr.mod.sound.VehicleSoundBase;
 
 import javax.annotation.Nonnull;
 import javax.annotation.Nullable;
+import java.lang.ref.WeakReference;
 import java.util.function.Consumer;
 import java.util.function.Supplier;
 import java.util.stream.Collectors;
@@ -207,13 +208,7 @@ public final class VehicleResource extends VehicleResourceSchema {
 			if (data2 != null) {
 				final VehicleResourceCacheHolder data3 = data2.getData(force);
 				if (data3 != null) {
-					final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModels = data3.optimizedModels.getData(force);
-					final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModelsDoorsClosed = data3.optimizedModelsDoorsClosed.getData(force);
-					final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModelsBogie1 = data3.optimizedModelsBogie1.getData(force);
-					final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> optimizedModelsBogie2 = data3.optimizedModelsBogie2.getData(force);
-					if (optimizedModels != null && optimizedModelsDoorsClosed != null && optimizedModelsBogie1 != null && optimizedModelsBogie2 != null) {
-						return new VehicleResourceCache(data3.floors, data3.doorways, optimizedModels, optimizedModelsDoorsClosed, optimizedModelsBogie1, optimizedModelsBogie2);
-					}
+					return data3.getView(force);
 				}
 			}
 		}
@@ -580,6 +575,8 @@ public final class VehicleResource extends VehicleResourceSchema {
 
 	private static class VehicleResourceCacheHolder {
 
+		// Reuse the view without keeping model data alive after its CachedResource expires.
+		private WeakReference<VehicleResourceCache> cacheView = new WeakReference<>(null);
 		private final ObjectImmutableList<Box> floors;
 		private final ObjectImmutableList<Box> doorways;
 		private final CachedResource<Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper>> optimizedModels;
@@ -600,6 +597,24 @@ public final class VehicleResource extends VehicleResourceSchema {
 			this.optimizedModelsDoorsClosed = optimizedModelsDoorsClosed;
 			this.optimizedModelsBogie1 = optimizedModelsBogie1;
 			this.optimizedModelsBogie2 = optimizedModelsBogie2;
+		}
+
+		@Nullable
+		private VehicleResourceCache getView(boolean force) {
+			// Refresh all four underlying caches before reusing their view, including while loading.
+			final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> models = optimizedModels.getData(force);
+			final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> modelsDoorsClosed = optimizedModelsDoorsClosed.getData(force);
+			final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> modelsBogie1 = optimizedModelsBogie1.getData(force);
+			final Object2ObjectOpenHashMap<PartCondition, OptimizedModelWrapper> modelsBogie2 = optimizedModelsBogie2.getData(force);
+			if (models == null || modelsDoorsClosed == null || modelsBogie1 == null || modelsBogie2 == null) {
+				return null;
+			}
+			VehicleResourceCache vehicleResourceCache = cacheView.get();
+			if (vehicleResourceCache == null || vehicleResourceCache.optimizedModels != models || vehicleResourceCache.optimizedModelsDoorsClosed != modelsDoorsClosed || vehicleResourceCache.optimizedModelsBogie1 != modelsBogie1 || vehicleResourceCache.optimizedModelsBogie2 != modelsBogie2) {
+				vehicleResourceCache = new VehicleResourceCache(floors, doorways, models, modelsDoorsClosed, modelsBogie1, modelsBogie2);
+				cacheView = new WeakReference<>(vehicleResourceCache);
+			}
+			return vehicleResourceCache;
 		}
 	}
 

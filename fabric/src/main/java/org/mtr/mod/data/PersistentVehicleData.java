@@ -5,7 +5,7 @@ import org.mtr.core.data.Vehicle;
 import org.mtr.core.data.VehicleCar;
 import org.mtr.core.data.VehicleExtraData;
 import org.mtr.core.tool.Utilities;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectOpenHashMap;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectImmutableList;
 import org.mtr.mapping.holder.BlockPos;
@@ -34,7 +34,8 @@ public final class PersistentVehicleData {
 	private final ObjectArrayList<VehicleSoundBase> vehicleSoundBaseList = new ObjectArrayList<>();
 	private final ObjectArrayList<ObjectArrayList<ScrollingText>> scrollingTexts = new ObjectArrayList<>();
 	private final ObjectArrayList<Oscillation> oscillations = new ObjectArrayList<>();
-	private final Object2ObjectOpenHashMap<String, DoorMovementInterpolation> doorMovementInterpolations = new Object2ObjectOpenHashMap<>();
+	private final Long2ObjectOpenHashMap<DoorMovementInterpolation[]> doorMovementInterpolations = new Long2ObjectOpenHashMap<>();
+	private static final int DOOR_INTERPOLATION_COUNT = DoorAnimationType.values().length * 2;
 
 	public PersistentVehicleData(ObjectImmutableList<VehicleCar> immutableVehicleCars, TransportMode transportMode) {
 		rayTracing = new boolean[immutableVehicleCars.size()];
@@ -96,13 +97,20 @@ public final class PersistentVehicleData {
 	}
 
 	public float getInterpolatedDoorValue(DoorAnimationType doorAnimationType, double doorZMultiplier, boolean flipped, double doorOverrideValue, boolean opening) {
-		final String key = doorZMultiplier + "_" + doorAnimationType + "_" + flipped;
-		final DoorMovementInterpolation doorMovementInterpolation = doorMovementInterpolations.get(key);
+		// Match Double.toString's key distinctions: signed zeros stay separate and all NaNs share one key.
+		final long key = Double.doubleToLongBits(doorZMultiplier);
+		DoorMovementInterpolation[] interpolations = doorMovementInterpolations.get(key);
+		if (interpolations == null) {
+			interpolations = new DoorMovementInterpolation[DOOR_INTERPOLATION_COUNT];
+			doorMovementInterpolations.put(key, interpolations);
+		}
+		final int interpolationIndex = doorAnimationType.ordinal() * 2 + (flipped ? 1 : 0);
+		final DoorMovementInterpolation doorMovementInterpolation = interpolations[interpolationIndex];
 		final double value = doorAnimationType.getDoorAnimationZ(doorZMultiplier, flipped, doorValue, opening);
 		final float interpolatedDoorValue;
 		if (doorMovementInterpolation == null) {
 			final DoorMovementInterpolation newDoorMovementInterpolation = new DoorMovementInterpolation();
-			doorMovementInterpolations.put(key, newDoorMovementInterpolation);
+			interpolations[interpolationIndex] = newDoorMovementInterpolation;
 			interpolatedDoorValue = newDoorMovementInterpolation.setAndGet(value, opening);
 		} else {
 			interpolatedDoorValue = doorMovementInterpolation.setAndGet(value, opening);

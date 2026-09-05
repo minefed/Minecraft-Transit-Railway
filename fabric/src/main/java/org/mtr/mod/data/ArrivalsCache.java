@@ -48,6 +48,7 @@ public abstract class ArrivalsCache {
 			requestArrivalsFromServer(platformIds, arrivalResponseList -> {
 				arrivalResponseCache.clear();
 				arrivalResponseCache.addAll(arrivalResponseList);
+				onArrivalsUpdated();
 			});
 
 			platformIds.forEach(platformId -> queuedPlatformIdsWithAge.compute(platformId, (key, age) -> age > PERSISTENT_AGE ? null : age + 1));
@@ -60,6 +61,9 @@ public abstract class ArrivalsCache {
 	}
 
 	public abstract long getMillisOffset();
+
+	protected void onArrivalsUpdated() {
+	}
 
 	protected abstract void requestArrivalsFromServer(LongAVLTreeSet platformIds, Consumer<ObjectList<ArrivalResponse>> callback);
 }

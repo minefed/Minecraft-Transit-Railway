@@ -33,6 +33,7 @@ import org.mtr.mod.item.ItemDriverKey;
 import org.mtr.mod.packet.PacketCheckRouteIdHasDisabledAnnouncements;
 import org.mtr.mod.packet.PacketFetchArrivals;
 import org.mtr.mod.packet.PacketRequestData;
+import org.mtr.mod.packet.PacketCodecCapabilities;
 import org.mtr.mod.render.*;
 import org.mtr.mod.resource.CachedResource;
 import org.mtr.mod.screen.BetaWarningScreen;
@@ -367,6 +368,7 @@ public final class InitClient {
 		REGISTRY_CLIENT.setupPackets(new Identifier(Init.MOD_ID, "packet"));
 
 		REGISTRY_CLIENT.eventRegistryClient.registerClientJoin(() -> {
+			PacketCodecCapabilities.resetClient();
 			MinecraftClientData.reset();
 			DynamicTextureCache.instance = new DynamicTextureCache();
 			lastMillis = System.currentTimeMillis();
@@ -394,6 +396,7 @@ public final class InitClient {
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerClientDisconnect(() -> {
+			PacketCodecCapabilities.resetClient();
 			PacketFetchArrivals.clearCallbacks();
 			PacketCheckRouteIdHasDisabledAnnouncements.clearCallbacks();
 			if (webserver != null) {

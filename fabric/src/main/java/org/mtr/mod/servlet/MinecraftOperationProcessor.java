@@ -10,6 +10,7 @@ import org.mtr.mapping.holder.ServerPlayerEntity;
 import org.mtr.mapping.holder.ServerWorld;
 import org.mtr.mod.Init;
 import org.mtr.mod.packet.PacketUpdateData;
+import org.mtr.mod.packet.PacketCodecCapabilities;
 import org.mtr.mod.packet.PacketUpdateVehiclesLifts;
 
 public final class MinecraftOperationProcessor {
@@ -22,7 +23,7 @@ public final class MinecraftOperationProcessor {
 					if (playerEntity == null) {
 						queueObject.runCallback(new PlayerPresentResponse(""));
 					} else {
-						Init.REGISTRY.sendPacketToClient(ServerPlayerEntity.cast(playerEntity), new PacketUpdateVehiclesLifts((VehicleLiftResponse) queueObject.data));
+						Init.REGISTRY.sendPacketToClient(ServerPlayerEntity.cast(playerEntity), new PacketUpdateVehiclesLifts((VehicleLiftResponse) queueObject.data, PacketCodecCapabilities.canSendToClient(playerEntity.getUuid())));
 						queueObject.runCallback(new PlayerPresentResponse(dimension));
 					}
 				}

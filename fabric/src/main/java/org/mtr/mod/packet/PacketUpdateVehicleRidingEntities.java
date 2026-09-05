@@ -6,6 +6,7 @@ import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.mapping.holder.ClientPlayerEntity;
 import org.mtr.mapping.holder.MinecraftClient;
 import org.mtr.mapping.holder.ServerPlayerEntity;
@@ -27,7 +28,7 @@ public final class PacketUpdateVehicleRidingEntities extends PacketRequestRespon
 		if (clientPlayerEntity != null) {
 			updateVehicleRidingEntities.add(new VehicleRidingEntity(clientPlayerEntity.getUuid(), ridingCar, x, y, z, isOnGangway, isDriver, manualAccelerate, manualBrake, manualToggleDoors, manualToggleAto, doorOverride));
 		}
-		return new PacketUpdateVehicleRidingEntities(Utilities.getJsonObjectFromData(updateVehicleRidingEntities).toString(), ridingCar < 0);
+		return new PacketUpdateVehicleRidingEntities(Utilities.getJsonObjectFromData(updateVehicleRidingEntities), ridingCar < 0);
 	}
 
 	public PacketUpdateVehicleRidingEntities(PacketBufferReceiver packetBufferReceiver) {
@@ -37,6 +38,11 @@ public final class PacketUpdateVehicleRidingEntities extends PacketRequestRespon
 
 	private PacketUpdateVehicleRidingEntities(String content, boolean dismount) {
 		super(content);
+		this.dismount = dismount;
+	}
+
+	private PacketUpdateVehicleRidingEntities(JsonObject content, boolean dismount) {
+		super(content, PacketCodecCapabilities.canSendToServer());
 		this.dismount = dismount;
 	}
 

@@ -344,7 +344,7 @@ public class VehicleRidingMovement {
 		return floorsOrDoorways.stream()
 				.filter(floorOrDoorway -> RenderVehicleHelper.boxContains(floorOrDoorway.left(), x, y, z))
 				.max(Comparator.comparingDouble(floorOrDoorway -> floorOrDoorway.left().getMaxYMapped()))
-				.orElse(floorsOrDoorways.stream().filter(floorOrDoorway -> Math.abs(floorOrDoorway.left().getMaxYMapped() - ridingVehicleY) <= 1).min(Comparator.comparingDouble(floorOrDoorway -> {
+				.orElseGet(() -> floorsOrDoorways.stream().filter(floorOrDoorway -> Math.abs(floorOrDoorway.left().getMaxYMapped() - ridingVehicleY) <= 1).min(Comparator.comparingDouble(floorOrDoorway -> {
 					final Box box = floorOrDoorway.left();
 					final double minX = box.getMinXMapped();
 					final double maxX = box.getMaxXMapped();

@@ -493,6 +493,8 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 
 		MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
 			storedMatrixTransformations.transform(graphicsHolder, offset);
+			final MutableText[] displayTexts = new MutableText[textSplit.length];
+			final double[] displayTextWidths = new double[textSplit.length];
 
 			displayPartDetailsList.forEach(displayPartDetails -> {
 				graphicsHolder.push();
@@ -508,8 +510,12 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 					for (int i = 0; i < textSplit.length; i++) {
 						final double availableTextWidth = (displayPart.width - displayXPadding * 2) / 16;
 						final double newTextScale = textHeightScale[i] * textScale;
-						final MutableText mutableText = IDrawing.withMTRFont(TextHelper.literal(textSplit[i]));
-						final double textWidth = GraphicsHolder.getTextWidth(mutableText) * newTextScale;
+						if (displayTexts[i] == null) {
+							displayTexts[i] = IDrawing.withMTRFont(TextHelper.literal(textSplit[i]));
+							displayTextWidths[i] = GraphicsHolder.getTextWidth(displayTexts[i]);
+						}
+						final MutableText mutableText = displayTexts[i];
+						final double textWidth = displayTextWidths[i] * newTextScale;
 						final HorizontalAlignment horizontalAlignment = getHorizontalAlignment(isCjk[i]);
 						graphicsHolder.push();
 						graphicsHolder.translate(Math.max(0, horizontalAlignment.getOffset(0, (float) (textWidth - availableTextWidth))), 0, 0);

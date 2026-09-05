@@ -5,8 +5,10 @@ import org.mtr.core.operation.ArrivalsRequest;
 import org.mtr.core.operation.ArrivalsResponse;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongCollection;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongImmutableList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectList;
 import org.mtr.mapping.holder.ServerWorld;
 import org.mtr.mapping.holder.World;
@@ -19,6 +21,7 @@ public final class ArrivalsCacheServer extends ArrivalsCache {
 
 	private long millisOffset = 0;
 	private final World world;
+	private final ArrivalResponseSerializationCache serializationCache = new ArrivalResponseSerializationCache();
 
 	private static final Object2ObjectAVLTreeMap<String, ArrivalsCacheServer> INSTANCES = new Object2ObjectAVLTreeMap<>();
 
@@ -30,6 +33,18 @@ public final class ArrivalsCacheServer extends ArrivalsCache {
 	@Override
 	public long getMillisOffset() {
 		return millisOffset;
+	}
+
+	public ObjectArrayList<String> requestSerializedArrivals(LongCollection platformIds) {
+		final ObjectArrayList<ArrivalResponse> arrivals = requestArrivals(platformIds);
+		final ObjectArrayList<String> responses = new ObjectArrayList<>(arrivals.size());
+		arrivals.forEach(arrival -> responses.add(serializationCache.get(arrival)));
+		return responses;
+	}
+
+	@Override
+	protected void onArrivalsUpdated() {
+		serializationCache.clear();
 	}
 
 	@Override

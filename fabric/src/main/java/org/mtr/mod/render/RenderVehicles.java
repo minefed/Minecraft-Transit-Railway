@@ -63,7 +63,7 @@ public class RenderVehicles implements IGui {
 					.map(vehicleCarAndPosition -> {
 						final ObjectArrayList<PositionAndRotation> bogiePositions = vehicleCarAndPosition.right()
 								.stream()
-								.map(bogiePositionPair -> new PositionAndRotation(bogiePositionPair.left(), bogiePositionPair.right(), true))
+								.map(bogiePositionPair -> PositionAndRotation.forBogieTransform(bogiePositionPair.left(), bogiePositionPair.right(), true))
 								.collect(Collectors.toCollection(ObjectArrayList::new));
 						return new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, new PositionAndRotation(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending)));
 					})
@@ -114,11 +114,11 @@ public class RenderVehicles implements IGui {
 
 						// Riding offset
 						final PositionAndRotation absoluteVehicleCarPositionAndRotation = vehicleCarDetails.right().right();
-						final PositionAndRotation vehicleCarRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteVehicleCarPositionAndRotation, cameraShakeOffset);
+						final PositionAndRotation vehicleCarRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteVehicleCarPositionAndRotation, cameraShakeOffset, false);
 
 						// Render each bogie of the car
 						iterateWithIndex(vehicleCarDetails.right().left(), (bogieIndex, absoluteBogiePositionAndRotation) -> {
-							final PositionAndRotation bogieRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteBogiePositionAndRotation, cameraShakeOffset);
+							final PositionAndRotation bogieRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteBogiePositionAndRotation, cameraShakeOffset, false);
 							final StoredMatrixTransformations storedMatrixTransformations = getStoredMatrixTransformations(offsetVector == null, bogieRenderingPositionAndRotation, 0);
 							if (OptimizedRenderer.hasOptimizedRendering()) {
 								vehicleResource.queueBogie(bogieIndex, storedMatrixTransformations, vehicle, absoluteVehicleCarPositionAndRotation.light);
@@ -367,20 +367,24 @@ public class RenderVehicles implements IGui {
 	 * @return the adjusted {@link PositionAndRotation} object
 	 */
 	public static PositionAndRotation getRenderPositionAndRotation(@Nullable Vector3d offsetVector, @Nullable Double offsetRotation, @Nullable PositionAndRotation ridingCarPositionAndRotation, PositionAndRotation renderingPositionAndRotation, Vector3d cameraShakeOffset) {
+		return getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, renderingPositionAndRotation, cameraShakeOffset, true);
+	}
+
+	private static PositionAndRotation getRenderPositionAndRotation(@Nullable Vector3d offsetVector, @Nullable Double offsetRotation, @Nullable PositionAndRotation ridingCarPositionAndRotation, PositionAndRotation renderingPositionAndRotation, Vector3d cameraShakeOffset, boolean sampleLight) {
 		if (offsetVector == null || ridingCarPositionAndRotation == null) {
 			// Normal absolute rendering
 			return renderingPositionAndRotation;
 		} else if (offsetRotation == null) {
 			// Offset rendering
-			return new PositionAndRotation(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
+			return createRenderPosition(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
 					cameraShakeOffset.getXMapped() + renderingPositionAndRotation.position.x - ridingCarPositionAndRotation.position.x,
 					cameraShakeOffset.getYMapped() + renderingPositionAndRotation.position.y - ridingCarPositionAndRotation.position.y,
 					cameraShakeOffset.getZMapped() + renderingPositionAndRotation.position.z - ridingCarPositionAndRotation.position.z
-			), renderingPositionAndRotation.yaw, renderingPositionAndRotation.pitch);
+			), renderingPositionAndRotation.yaw, renderingPositionAndRotation.pitch, sampleLight);
 		} else {
 			// Offset rendering with rotation
 			final double ridingRotation = offsetRotation - ridingCarPositionAndRotation.yaw - Math.toRadians(MinecraftClient.getInstance().getGameRendererMapped().getCamera().getYaw());
-			return new PositionAndRotation(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
+			return createRenderPosition(new Vector(-offsetVector.getXMapped(), -offsetVector.getYMapped(), -offsetVector.getZMapped()).rotateX(ridingCarPositionAndRotation.pitch).rotateY(ridingCarPositionAndRotation.yaw).add(
 					renderingPositionAndRotation.position.x - ridingCarPositionAndRotation.position.x,
 					renderingPositionAndRotation.position.y - ridingCarPositionAndRotation.position.y,
 					renderingPositionAndRotation.position.z - ridingCarPositionAndRotation.position.z
@@ -388,8 +392,12 @@ public class RenderVehicles implements IGui {
 					cameraShakeOffset.getXMapped(),
 					cameraShakeOffset.getYMapped(),
 					cameraShakeOffset.getZMapped()
-			), renderingPositionAndRotation.yaw + ridingRotation, renderingPositionAndRotation.pitch);
+			), renderingPositionAndRotation.yaw + ridingRotation, renderingPositionAndRotation.pitch, sampleLight);
 		}
+	}
+
+	private static PositionAndRotation createRenderPosition(Vector position, double yaw, double pitch, boolean sampleLight) {
+		return sampleLight ? new PositionAndRotation(position, yaw, pitch) : PositionAndRotation.forTransform(position, yaw, pitch);
 	}
 
 	/**
@@ -481,8 +489,8 @@ public class RenderVehicles implements IGui {
 		final PositionAndRotation playerRenderingPositionAndRotation = getRenderPositionAndRotation(
 				offsetVector, offsetRotation,
 				ridingCarPositionAndRotation,
-				new PositionAndRotation(playerCarPositionAndRotation.position.add(interpolatedPosition.rotateX(playerCarPositionAndRotation.pitch).rotateY(playerCarPositionAndRotation.yaw)), 0, 0),
-				cameraShakeOffset
+				PositionAndRotation.forTransform(playerCarPositionAndRotation.position.add(interpolatedPosition.rotateX(playerCarPositionAndRotation.pitch).rotateY(playerCarPositionAndRotation.yaw)), 0, 0),
+				cameraShakeOffset, false
 		);
 		final StoredMatrixTransformations storedMatrixTransformations = getStoredMatrixTransformations(offsetVector == null, playerRenderingPositionAndRotation, 0);
 

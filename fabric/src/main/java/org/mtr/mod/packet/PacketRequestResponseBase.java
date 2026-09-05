@@ -24,19 +24,25 @@ import javax.annotation.Nullable;
  */
 public abstract class PacketRequestResponseBase extends PacketHandler {
 
-	private final String content;
+	private final PacketPayload payload;
+	private boolean binary;
 
 	public PacketRequestResponseBase(PacketBufferReceiver packetBufferReceiver) {
-		content = packetBufferReceiver.readString();
+		payload = PacketPayload.read(packetBufferReceiver);
 	}
 
 	public PacketRequestResponseBase(String content) {
-		this.content = content;
+		payload = new PacketPayload(content);
+	}
+
+	protected PacketRequestResponseBase(JsonObject content, boolean binary) {
+		payload = new PacketPayload(content);
+		this.binary = binary;
 	}
 
 	@Override
 	public void write(PacketBufferSender packetBufferSender) {
-		packetBufferSender.writeString(content);
+		payload.write(packetBufferSender, binary);
 	}
 
 	@Override
@@ -46,15 +52,28 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 
 	@Override
 	public final void runClient() {
-		runClientInbound(new JsonReader(Utilities.parseJson(content)));
+		final JsonObject json = payload.json();
+		if (this instanceof PacketRequestData) {
+			PacketCodecCapabilities.receiveServer(json);
+		}
+		runClientInbound(new JsonReader(json));
 	}
 
 	protected void runServerOutbound(ServerWorld serverWorld, @Nullable ServerPlayerEntity serverPlayerEntity) {
 		final ResponseType responseType = responseType();
-		Init.sendMessageC2S(getKey(), serverWorld.getServer(), new World(serverWorld.data), getDataInstance(new JsonReader(Utilities.parseJson(content))), responseType == ResponseType.NONE ? null : responseData -> {
+		final JsonObject requestJson = payload.json();
+		final boolean negotiate = this instanceof PacketRequestData && serverPlayerEntity != null;
+		if (negotiate) {
+			PacketCodecCapabilities.receiveClient(serverPlayerEntity.getUuid(), requestJson);
+		}
+		Init.sendMessageC2S(getKey(), serverWorld.getServer(), new World(serverWorld.data), getDataInstance(new JsonReader(requestJson)), responseType == ResponseType.NONE ? null : responseData -> {
 			final JsonObject responseJson = Utilities.getJsonObjectFromData(responseData);
-			final String responseContent = responseJson.toString();
-			final PacketRequestResponseBase responsePacket = getInstance(responseContent);
+			final boolean negotiated = negotiate && PacketCodecCapabilities.canSendToClient(serverPlayerEntity.getUuid());
+			if (negotiated) {
+				PacketCodecCapabilities.advertise(responseJson);
+			}
+			final PacketRequestResponseBase responsePacket = getInstance(responseJson);
+			responsePacket.binary = negotiated;
 			if (responseType == ResponseType.PLAYER) {
 				if (serverPlayerEntity != null) {
 					Init.REGISTRY.sendPacketToClient(serverPlayerEntity, responsePacket);
@@ -77,6 +96,10 @@ public abstract class PacketRequestResponseBase extends PacketHandler {
 	 * @return an instance of the packet (should be constructed using {@link #PacketRequestResponseBase(String)})
 	 */
 	protected abstract PacketRequestResponseBase getInstance(String content);
+
+	protected PacketRequestResponseBase getInstance(JsonObject content) {
+		return getInstance(content.toString());
+	}
 
 	protected abstract SerializedDataBase getDataInstance(JsonReader jsonReader);
 

@@ -1,7 +1,6 @@
 package org.mtr.mod.render;
 
 import org.mtr.core.data.InterchangeColorsForStationName;
-import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.EntityRenderer;
@@ -36,17 +35,17 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 	private static final int TOTAL_RENDER_STAGES = 2;
 	private static final QueuedRenderLayer[] QUEUED_RENDER_LAYERS = QueuedRenderLayer.values();
 	private static final Identifier EMPTY_IDENTIFIER = new Identifier("");
-	private static ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> renders = createRenderQueues();
-	private static ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> currentRenders = createRenderQueues();
+	private static ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> renders = createRenderQueues();
+	private static ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> currentRenders = createRenderQueues();
 
-	private static ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> createRenderQueues() {
-		final ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> renderQueues = new ObjectArrayList<>(TOTAL_RENDER_STAGES);
+	private static ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> createRenderQueues() {
+		final ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> renderQueues = new ObjectArrayList<>(TOTAL_RENDER_STAGES);
 		for (int i = 0; i < TOTAL_RENDER_STAGES; i++) {
 			final int renderStageCount = QUEUED_RENDER_LAYERS.length;
-			final ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>> rendersList = new ObjectArrayList<>(renderStageCount);
+			final ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>> rendersList = new ObjectArrayList<>(renderStageCount);
 
 			for (int j = 0; j < renderStageCount; j++) {
-				rendersList.add(j, new Object2ObjectArrayMap<>());
+				rendersList.add(j, new RenderQueue<>());
 			}
 
 			renderQueues.add(i, rendersList);
@@ -116,7 +115,7 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 
 		// Swap the double buffers instead of copying every texture bucket and
 		// callback into a second map each frame.
-		final ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> rendersToProcess = renders;
+		final ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> rendersToProcess = renders;
 		renders = currentRenders;
 		currentRenders = rendersToProcess;
 		clearRenderQueues(renders);
@@ -168,7 +167,7 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 
 	public static void scheduleRender(@Nullable Identifier identifier, boolean priority, QueuedRenderLayer queuedRenderLayer, BiConsumer<GraphicsHolder, Vector3d> callback) {
 		if (identifier != null) {
-			renders.get(priority ? 1 : 0).get(queuedRenderLayer.ordinal()).computeIfAbsent(identifier, key -> new ObjectArrayList<>()).add(callback);
+			renders.get(priority ? 1 : 0).get(queuedRenderLayer.ordinal()).add(identifier, callback);
 		}
 	}
 
@@ -181,8 +180,8 @@ public class MainRenderer extends EntityRenderer<EntityRendering> implements IGu
 		currentRenders.forEach(renderForPriority -> renderForPriority.forEach(renderForPriorityAndQueuedRenderLayer -> renderForPriorityAndQueuedRenderLayer.remove(identifier)));
 	}
 
-	private static void clearRenderQueues(ObjectArrayList<ObjectArrayList<Object2ObjectArrayMap<Identifier, ObjectArrayList<BiConsumer<GraphicsHolder, Vector3d>>>>> renderQueues) {
-		renderQueues.forEach(renderForPriority -> renderForPriority.forEach(Object2ObjectArrayMap::clear));
+	private static void clearRenderQueues(ObjectArrayList<ObjectArrayList<RenderQueue<Identifier, BiConsumer<GraphicsHolder, Vector3d>>>> renderQueues) {
+		renderQueues.forEach(renderForPriority -> renderForPriority.forEach(RenderQueue::clear));
 	}
 
 	/**
