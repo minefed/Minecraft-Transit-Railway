@@ -31,16 +31,29 @@ public final class ClientServlet extends HttpServlet {
 		final AsyncContext asyncContext = httpServletRequest.startAsync();
 		asyncContext.setTimeout(0);
 		final String endpoint = httpServletRequest instanceof Request ? ((Request) httpServletRequest).getOriginalURI() : httpServletRequest.getRequestURI();
-		MinecraftClient.getInstance().execute(() -> InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketForwardClientRequest(
+		final PacketForwardClientRequest packet = new PacketForwardClientRequest(
 				endpoint,
 				content,
 				(response, path) -> {
-					if (path.equals(endpoint)) {
+					if (PacketForwardClientRequest.isFailedRequestPath(path)) {
+						try {
+							httpServletResponse.setStatus(HttpResponseStatus.INTERNAL_SERVER_ERROR.code);
+						} finally {
+							asyncContext.complete();
+						}
+					} else if (path.equals(endpoint)) {
 						ServletBase.sendResponse(httpServletResponse, asyncContext, response, ServletBase.getMimeType(endpoint.equals("/") ? "html" : endpoint), HttpResponseStatus.OK);
 					} else {
 						ServletBase.sendResponse(httpServletResponse, asyncContext, path, "", HttpResponseStatus.REDIRECT);
 					}
 				}
-		)));
+		);
+		MinecraftClient.getInstance().execute(() -> InitClient.REGISTRY_CLIENT.sendPacketToServer(packet));
+	}
+
+	@Override
+	public void destroy() {
+		PacketForwardClientRequest.clearCallbacks();
+		super.destroy();
 	}
 }

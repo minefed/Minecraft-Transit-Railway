@@ -32,8 +32,12 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 	private final ObjectArrayList<DisplayPartDetails> displayPartDetailsList = new ObjectArrayList<>();
 	private final int displayColorCjkInt;
 	private final int displayColorInt;
+	private boolean hasOptimizedDoorGeometry;
 
 	private static final int LINE_PADDING = 2;
+	private static final Identifier WHITE_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/white.png");
+	private static final Identifier CIRCLE_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/sign/circle.png");
+	private static final Identifier SEVEN_SEGMENT_TEXTURE = new Identifier(Init.MOD_ID, "textures/overlay/seven_segment.png");
 
 	public ModelPropertiesPart(ReaderBase readerBase) {
 		super(readerBase);
@@ -169,6 +173,7 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 					break;
 			}
 		}));
+		hasOptimizedDoorGeometry |= isDoor() && !modelParts.isEmpty() && !partDetailsList.isEmpty();
 	}
 
 	public void writeCache(
@@ -203,6 +208,7 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				});
 			}
 		}));
+		hasOptimizedDoorGeometry |= isDoor() && !objModels.isEmpty() && !partDetailsList.isEmpty();
 	}
 
 	public void render(Identifier texture, StoredMatrixTransformations storedMatrixTransformations, @Nullable VehicleExtension vehicle, int carNumber, int[] scrollingDisplayIndexTracker, int light, ObjectArrayList<ObjectDoubleImmutablePair<Box>> openDoorways, boolean fromResourcePackCreator) {
@@ -211,6 +217,11 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 				case NORMAL:
 					final ObjectIntImmutablePair<QueuedRenderLayer> renderProperties = getRenderProperties(renderStage, light, vehicle);
 					if (OptimizedRenderer.hasOptimizedRendering()) {
+						// Closed doors are already included in the optimized vehicle model, while
+						// non-door parts never emit anything from renderNormal on this path.
+						if (!hasOptimizedDoorGeometry || openDoorways.isEmpty()) {
+							break;
+						}
 						MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, renderProperties, openDoorways, light, graphicsHolder, offset));
 					} else {
 						MainRenderer.scheduleRender(texture, false, renderProperties.left(), (graphicsHolder, offset) -> renderNormal(storedMatrixTransformations, vehicle, renderProperties, openDoorways, light, graphicsHolder, offset));
@@ -375,7 +386,7 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 			color = getOrDefault(ARGB_BLACK | vehicle.vehicleExtraData.getThisRouteColor(), ARGB_BLACK | vehicle.vehicleExtraData.getNextRouteColor(), ARGB_BLACK | vehicle.vehicleExtraData.getPreviousRouteColor(), 0, vehicle);
 		}
 
-		MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, String.format("textures/block/%s.png", displayType == DisplayType.ROUTE_COLOR ? "white" : "sign/circle")), true, QueuedRenderLayer.LIGHT_2, (graphicsHolder, offset) -> {
+		MainRenderer.scheduleRender(displayType == DisplayType.ROUTE_COLOR ? WHITE_TEXTURE : CIRCLE_TEXTURE, true, QueuedRenderLayer.LIGHT_2, (graphicsHolder, offset) -> {
 			storedMatrixTransformations.transform(graphicsHolder, offset);
 
 			displayPartDetailsList.forEach(displayPartDetails -> {
@@ -409,7 +420,7 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 		final String text = formatText(vehicle);
 		final HorizontalAlignment horizontalAlignment = getHorizontalAlignment(false);
 
-		MainRenderer.scheduleRender(new Identifier(Init.MOD_ID, "textures/overlay/seven_segment.png"), true, QueuedRenderLayer.LIGHT_2, (graphicsHolder, offset) -> {
+		MainRenderer.scheduleRender(SEVEN_SEGMENT_TEXTURE, true, QueuedRenderLayer.LIGHT_2, (graphicsHolder, offset) -> {
 			storedMatrixTransformations.transform(graphicsHolder, offset);
 
 			displayPartDetailsList.forEach(displayPartDetails -> {
@@ -482,6 +493,8 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 
 		MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
 			storedMatrixTransformations.transform(graphicsHolder, offset);
+			final MutableText[] displayTexts = new MutableText[textSplit.length];
+			final double[] displayTextWidths = new double[textSplit.length];
 
 			displayPartDetailsList.forEach(displayPartDetails -> {
 				graphicsHolder.push();
@@ -497,8 +510,12 @@ public final class ModelPropertiesPart extends ModelPropertiesPartSchema impleme
 					for (int i = 0; i < textSplit.length; i++) {
 						final double availableTextWidth = (displayPart.width - displayXPadding * 2) / 16;
 						final double newTextScale = textHeightScale[i] * textScale;
-						final MutableText mutableText = IDrawing.withMTRFont(TextHelper.literal(textSplit[i]));
-						final double textWidth = GraphicsHolder.getTextWidth(mutableText) * newTextScale;
+						if (displayTexts[i] == null) {
+							displayTexts[i] = IDrawing.withMTRFont(TextHelper.literal(textSplit[i]));
+							displayTextWidths[i] = GraphicsHolder.getTextWidth(displayTexts[i]);
+						}
+						final MutableText mutableText = displayTexts[i];
+						final double textWidth = displayTextWidths[i] * newTextScale;
 						final HorizontalAlignment horizontalAlignment = getHorizontalAlignment(isCjk[i]);
 						graphicsHolder.push();
 						graphicsHolder.translate(Math.max(0, horizontalAlignment.getOffset(0, (float) (textWidth - availableTextWidth))), 0, 0);

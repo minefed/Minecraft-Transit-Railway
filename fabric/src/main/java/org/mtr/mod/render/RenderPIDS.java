@@ -7,6 +7,7 @@ import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.core.tool.Utilities;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongCollection;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2IntOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.mapping.holder.BlockPos;
 import org.mtr.mapping.holder.Direction;
@@ -31,10 +32,18 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 	private final float maxWidth;
 	private final boolean rotate90;
 	private final float textPadding;
+	private String cachedWrappedText;
+	private float cachedWrappedTextWidth = Float.NaN;
+	private ObjectArrayList<String> cachedWrappedLines;
+	private int cachedWrappedTextGeneration = -1;
 
 	public static final int SWITCH_LANGUAGE_TICKS = 60;
 	private static final int STATIONS_PER_PAGE = 10;
 	private static final int SWITCH_PAGE_TICKS = 120;
+	private static final int MAX_TEXT_WIDTH_CACHE_SIZE = 4096;
+	private static final Object2IntOpenHashMap<String> TEXT_WIDTH_CACHE = new Object2IntOpenHashMap<>();
+	private static final PidsTextCache TEXT_CACHE = new PidsTextCache();
+	private static volatile int textWidthCacheGeneration;
 
 	public RenderPIDS(Argument dispatcher, float startX, float startY, float startZ, float maxHeight, int maxWidth, boolean rotate90, float textPadding) {
 		super(dispatcher);
@@ -106,14 +115,14 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		final boolean hasDifferentCarLengths = hasDifferentCarLengths(arrivalResponseList);
 		final boolean isSingleArrival = entity instanceof BlockPIDSVerticalSingleArrival1.BlockEntity;
 		final int arrivalsPerPage = isSingleArrival ? 1 : entity.alternateLines() ? entity.maxArrivals / 2 : entity.maxArrivals;
+		final int languageTicks = (int) Math.floor(InitClient.getGameTick()) / SWITCH_LANGUAGE_TICKS;
 		int arrivalIndex = entity.getDisplayPage() * arrivalsPerPage;
 
 		for (int i = 0; i < entity.maxArrivals; i++) {
-			final int languageTicks = (int) Math.floor(InitClient.getGameTick()) / SWITCH_LANGUAGE_TICKS;
 			final ArrivalResponse arrivalResponse;
 			final String customMessage = entity.getMessage(i);
 			final String[] destinationSplit;
-			final String[] customMessageSplit = customMessage.split("\\|");
+			final String[] customMessageSplit = TEXT_CACHE.split(customMessage);
 			final boolean renderCustomMessage;
 			final int languageIndex;
 
@@ -135,26 +144,7 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 					renderCustomMessage = true;
 					languageIndex = languageTicks % customMessageSplit.length;
 				} else {
-					final String[] tempDestinationSplit = arrivalResponse.getDestination().split("\\|");
-					if (arrivalResponse.getRouteNumber().isEmpty()) {
-						destinationSplit = tempDestinationSplit;
-					} else {
-						final String[] tempNumberSplit = arrivalResponse.getRouteNumber().split("\\|");
-						int destinationIndex = 0;
-						int numberIndex = 0;
-						final ObjectArrayList<String> newDestinations = new ObjectArrayList<>();
-						while (true) {
-							final String newDestination = String.format("%s %s", tempNumberSplit[numberIndex % tempNumberSplit.length], tempDestinationSplit[destinationIndex % tempDestinationSplit.length]);
-							if (newDestinations.contains(newDestination)) {
-								break;
-							} else {
-								newDestinations.add(newDestination);
-							}
-							destinationIndex++;
-							numberIndex++;
-						}
-						destinationSplit = newDestinations.toArray(new String[0]);
-					}
+					destinationSplit = TEXT_CACHE.getDestinations(arrivalResponse.getRouteNumber(), arrivalResponse.getDestination());
 					final int messageCount = destinationSplit.length + (customMessage.isEmpty() ? 0 : customMessageSplit.length);
 					renderCustomMessage = languageTicks % messageCount >= destinationSplit.length;
 					languageIndex = (languageTicks % messageCount) - (renderCustomMessage ? destinationSplit.length : 0);
@@ -205,32 +195,31 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 						renderText(graphicsHolder, destinationFormatted, color, maxWidth * scale / 16, HorizontalAlignment.LEFT);
 					} else if (i == 3) {
 						final SimplifiedRoute simplifiedRoute = MinecraftClientData.getInstance().simplifiedRouteIdMap.get(arrivalResponse.getRouteId());
-						final ObjectArrayList<SimplifiedRoutePlatform> stations = new ObjectArrayList<>();
-						if (simplifiedRoute != null) {
-							for (int j = simplifiedRoute.getPlatformIndex(arrivalResponse.getPlatformId()) + 1; j < simplifiedRoute.getPlatforms().size(); j++) {
-								stations.add(simplifiedRoute.getPlatforms().get(j));
-							}
-						}
+						final int firstStationIndex = simplifiedRoute == null ? 0 : simplifiedRoute.getPlatformIndex(arrivalResponse.getPlatformId()) + 1;
+						final int stationCount = simplifiedRoute == null ? 0 : Math.max(0, simplifiedRoute.getPlatforms().size() - firstStationIndex);
 
 						final ObjectArrayList<String> lines = new ObjectArrayList<>();
 
-						if (stations.isEmpty()) {
-							lines.addAll(wrapLines((isCjk ? TranslationProvider.GUI_MTR_TERMINATES_HERE_CJK : TranslationProvider.GUI_MTR_TERMINATES_HERE).getString(), maxWidth * scale / 16));
+						if (stationCount == 0) {
+							lines.addAll(getWrappedLines((isCjk ? TranslationProvider.GUI_MTR_TERMINATES_HERE_CJK : TranslationProvider.GUI_MTR_TERMINATES_HERE).getString(), maxWidth * scale / 16));
 						} else {
-							final int callingAtMaxPages = (int) Math.max(Math.ceil(stations.size() / (float) STATIONS_PER_PAGE), 1);
+							final int callingAtMaxPages = (int) Math.max(Math.ceil(stationCount / (float) STATIONS_PER_PAGE), 1);
 							final int callingAtPage = callingAtMaxPages == 1 ? 0 : (int) Math.floor(InitClient.getGameTick() / SWITCH_PAGE_TICKS) % callingAtMaxPages;
 							lines.add((isCjk ? TranslationProvider.GUI_MTR_CALLING_AT_CJK : TranslationProvider.GUI_MTR_CALLING_AT).getString(callingAtPage + 1, callingAtMaxPages));
 							for (int j = 0; j < STATIONS_PER_PAGE; j++) {
-								final SimplifiedRoutePlatform simplifiedRoutePlatform = Utilities.getElement(stations, j + callingAtPage * STATIONS_PER_PAGE);
+								final int relativeStationIndex = j + callingAtPage * STATIONS_PER_PAGE;
+								// Utilities.getElement also accepts indices relative to the end.
+								final int stationIndex = relativeStationIndex < 0 ? stationCount + relativeStationIndex : relativeStationIndex;
+								final SimplifiedRoutePlatform simplifiedRoutePlatform = stationIndex < 0 || stationIndex >= stationCount ? null : simplifiedRoute.getPlatforms().get(firstStationIndex + stationIndex);
 								if (simplifiedRoutePlatform != null) {
-									final String[] stationNameSplit = simplifiedRoutePlatform.getStationName().split("\\|");
+									final String[] stationNameSplit = TEXT_CACHE.split(simplifiedRoutePlatform.getStationName());
 									lines.add(stationNameSplit[languageTicks % stationNameSplit.length]);
 								}
 							}
 						}
 
 						lines.forEach(line -> {
-							renderText(graphicsHolder, line, color, maxWidth * scale / 16, stations.isEmpty() ? HorizontalAlignment.CENTER : HorizontalAlignment.LEFT);
+							renderText(graphicsHolder, line, color, maxWidth * scale / 16, stationCount == 0 ? HorizontalAlignment.CENTER : HorizontalAlignment.LEFT);
 							graphicsHolder.translate(0, maxHeight * scale / entity.maxArrivals / 16, 0);
 						});
 					} else if (i == 15) {
@@ -280,7 +269,7 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 
 	private void renderText(GraphicsHolder graphicsHolder, String text, int color, float availableWidth, HorizontalAlignment horizontalAlignment) {
 		graphicsHolder.push();
-		final int textWidth = GraphicsHolder.getTextWidth(text);
+		final int textWidth = getTextWidthCached(text);
 		if (availableWidth < textWidth) {
 			graphicsHolder.scale(textWidth == 0 ? 1 : availableWidth / textWidth, 1, 1);
 		}
@@ -300,14 +289,17 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		return false;
 	}
 
-	private static ObjectArrayList<String> wrapLines(String text, float availableWidth) {
+	private ObjectArrayList<String> getWrappedLines(String text, float availableWidth) {
+		if (text.equals(cachedWrappedText) && Float.compare(availableWidth, cachedWrappedTextWidth) == 0 && cachedWrappedLines != null && cachedWrappedTextGeneration == textWidthCacheGeneration) {
+			return cachedWrappedLines;
+		}
 		final ObjectArrayList<String> lines = new ObjectArrayList<>();
 		final String[] textSplit = text.split("\\s");
 		String tempText = "";
 
 		for (final String textPart : textSplit) {
 			final String newText = tempText + " " + textPart;
-			if (!tempText.isEmpty() && GraphicsHolder.getTextWidth(newText) > availableWidth) {
+			if (!tempText.isEmpty() && getTextWidthCached(newText) > availableWidth) {
 				lines.add(tempText);
 				tempText = textPart;
 			} else {
@@ -316,6 +308,28 @@ public class RenderPIDS<T extends BlockPIDSBase.BlockEntityBase> extends BlockEn
 		}
 
 		lines.add(tempText);
-		return lines;
+		cachedWrappedText = text;
+		cachedWrappedTextWidth = availableWidth;
+		cachedWrappedLines = lines;
+		cachedWrappedTextGeneration = textWidthCacheGeneration;
+		return cachedWrappedLines;
+	}
+
+	public static void clearTextWidthCache() {
+		TEXT_WIDTH_CACHE.clear();
+		TEXT_CACHE.clear();
+		textWidthCacheGeneration++;
+	}
+
+	private static int getTextWidthCached(String text) {
+		if (TEXT_WIDTH_CACHE.containsKey(text)) {
+			return TEXT_WIDTH_CACHE.getInt(text);
+		}
+		final int width = GraphicsHolder.getTextWidth(text);
+		if (TEXT_WIDTH_CACHE.size() >= MAX_TEXT_WIDTH_CACHE_SIZE) {
+			TEXT_WIDTH_CACHE.clear();
+		}
+		TEXT_WIDTH_CACHE.put(text, width);
+		return width;
 	}
 }

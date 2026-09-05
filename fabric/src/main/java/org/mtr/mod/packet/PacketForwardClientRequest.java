@@ -1,6 +1,5 @@
 package org.mtr.mod.packet;
 
-import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.mapping.holder.MinecraftServer;
 import org.mtr.mapping.holder.ServerPlayerEntity;
 import org.mtr.mapping.registry.PacketHandler;
@@ -9,7 +8,6 @@ import org.mtr.mapping.tool.PacketBufferSender;
 import org.mtr.mod.Init;
 
 import javax.annotation.Nullable;
-import java.util.Random;
 import java.util.function.BiConsumer;
 
 public final class PacketForwardClientRequest extends PacketHandler {
@@ -19,7 +17,8 @@ public final class PacketForwardClientRequest extends PacketHandler {
 	private final String path;
 	private final long callbackId;
 
-	private static final Long2ObjectAVLTreeMap<BiConsumer<String, String>> CALLBACKS = new Long2ObjectAVLTreeMap<>();
+	private static final PendingCallbackRegistry<BiConsumer<String, String>> CALLBACKS = new PendingCallbackRegistry<>();
+	private static final String FAILED_REQUEST_PATH = "";
 
 	public PacketForwardClientRequest(PacketBufferReceiver packetBufferReceiver) {
 		endpoint = packetBufferReceiver.readString();
@@ -32,8 +31,7 @@ public final class PacketForwardClientRequest extends PacketHandler {
 		this.endpoint = endpoint;
 		this.content = content == null ? "" : content;
 		path = "";
-		callbackId = new Random().nextLong();
-		CALLBACKS.put(callbackId, callback);
+		callbackId = CALLBACKS.register(callback, () -> callback.accept("", FAILED_REQUEST_PATH));
 	}
 
 	private PacketForwardClientRequest(@Nullable String content, String path, long callbackId) {
@@ -56,7 +54,8 @@ public final class PacketForwardClientRequest extends PacketHandler {
 		Init.REQUEST_HELPER.sendRequest(
 				String.format("http://localhost:%s%s", Init.getServerPort(), endpoint),
 				content.isEmpty() ? null : content,
-				(response, path) -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketForwardClientRequest(response, path, callbackId))
+				(response, path) -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketForwardClientRequest(response, path, callbackId)),
+				exception -> Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketForwardClientRequest("", FAILED_REQUEST_PATH, callbackId))
 		);
 	}
 
@@ -66,5 +65,13 @@ public final class PacketForwardClientRequest extends PacketHandler {
 		if (callback != null) {
 			callback.accept(content, path);
 		}
+	}
+
+	public static boolean isFailedRequestPath(String path) {
+		return FAILED_REQUEST_PATH.equals(path);
+	}
+
+	public static void clearCallbacks() {
+		CALLBACKS.clearAndExpire();
 	}
 }

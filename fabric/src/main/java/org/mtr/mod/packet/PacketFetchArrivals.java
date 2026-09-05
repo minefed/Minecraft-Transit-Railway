@@ -2,8 +2,6 @@ package org.mtr.mod.packet;
 
 import org.mtr.core.operation.ArrivalResponse;
 import org.mtr.core.serializer.JsonReader;
-import org.mtr.core.tool.Utilities;
-import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectList;
@@ -15,19 +13,18 @@ import org.mtr.mapping.tool.PacketBufferSender;
 import org.mtr.mod.Init;
 import org.mtr.mod.data.ArrivalsCacheServer;
 
-import java.util.Random;
-import java.util.stream.Collectors;
-
 public final class PacketFetchArrivals extends PacketHandler {
 
 	private final LongAVLTreeSet platformIds;
 	private final long responseTime;
-	private final ObjectArrayList<String> responses = new ObjectArrayList<>();
+	private final ObjectArrayList<PacketPayload> responses = new ObjectArrayList<>();
 	private final long callbackId;
+	private final boolean binary;
 
-	private static final Long2ObjectAVLTreeMap<Callback> CALLBACKS = new Long2ObjectAVLTreeMap<>();
+	private static final PendingCallbackRegistry<Callback> CALLBACKS = new PendingCallbackRegistry<>();
 
 	public PacketFetchArrivals(PacketBufferReceiver packetBufferReceiver) {
+		binary = false;
 		platformIds = new LongAVLTreeSet();
 		final int platformIdCount = packetBufferReceiver.readInt();
 		for (int i = 0; i < platformIdCount; i++) {
@@ -38,23 +35,27 @@ public final class PacketFetchArrivals extends PacketHandler {
 
 		final int responseCount = packetBufferReceiver.readInt();
 		for (int i = 0; i < responseCount; i++) {
-			responses.add(packetBufferReceiver.readString());
+			responses.add(PacketPayload.read(packetBufferReceiver));
 		}
 
 		callbackId = packetBufferReceiver.readLong();
 	}
 
 	public PacketFetchArrivals(LongAVLTreeSet platformIds, Callback callback) {
+		binary = false;
 		this.platformIds = platformIds;
 		responseTime = 0;
-		callbackId = new Random().nextLong();
-		CALLBACKS.put(callbackId, callback);
+		callbackId = CALLBACKS.register(callback);
 	}
 
-	private PacketFetchArrivals(long responseTime, ObjectArrayList<ArrivalResponse> arrivalResponses, long callbackId) {
+	private PacketFetchArrivals(long responseTime, ObjectArrayList<String> arrivalResponses, long callbackId, boolean binary) {
+		this.binary = binary;
 		platformIds = new LongAVLTreeSet();
 		this.responseTime = responseTime;
-		arrivalResponses.forEach(arrivalResponse -> responses.add(Utilities.getJsonObjectFromData(arrivalResponse).toString()));
+		responses.ensureCapacity(arrivalResponses.size());
+		for (final String arrivalResponse : arrivalResponses) {
+			responses.add(new PacketPayload(arrivalResponse));
+		}
 		this.callbackId = callbackId;
 	}
 
@@ -64,22 +65,30 @@ public final class PacketFetchArrivals extends PacketHandler {
 		platformIds.forEach(packetBufferSender::writeLong);
 		packetBufferSender.writeLong(responseTime);
 		packetBufferSender.writeInt(responses.size());
-		responses.forEach(packetBufferSender::writeString);
+		responses.forEach(response -> response.write(packetBufferSender, binary));
 		packetBufferSender.writeLong(callbackId);
 	}
 
 	@Override
 	public void runServer(MinecraftServer minecraftServer, ServerPlayerEntity serverPlayerEntity) {
 		final ArrivalsCacheServer instance = ArrivalsCacheServer.getInstance(serverPlayerEntity.getServerWorld());
-		Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketFetchArrivals(instance.getMillisOffset() + System.currentTimeMillis(), instance.requestArrivals(platformIds), callbackId));
+		Init.REGISTRY.sendPacketToClient(serverPlayerEntity, new PacketFetchArrivals(instance.getMillisOffset() + System.currentTimeMillis(), instance.requestSerializedArrivals(platformIds), callbackId, PacketCodecCapabilities.canSendToClient(serverPlayerEntity.getUuid())));
 	}
 
 	@Override
 	public void runClient() {
 		final Callback callback = CALLBACKS.remove(callbackId);
 		if (callback != null) {
-			callback.accept(responseTime, responses.stream().map(response -> new ArrivalResponse(new JsonReader(Utilities.parseJson(response)))).collect(Collectors.toCollection(ObjectArrayList::new)));
+			final ObjectArrayList<ArrivalResponse> arrivalResponses = new ObjectArrayList<>(responses.size());
+			for (final PacketPayload response : responses) {
+				arrivalResponses.add(new ArrivalResponse(new JsonReader(response.json())));
+			}
+			callback.accept(responseTime, arrivalResponses);
 		}
+	}
+
+	public static void clearCallbacks() {
+		CALLBACKS.clear();
 	}
 
 	@FunctionalInterface

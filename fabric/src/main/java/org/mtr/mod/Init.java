@@ -18,6 +18,7 @@ import org.mtr.libraries.com.google.gson.JsonParser;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Object2ObjectArrayMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
+import org.mtr.libraries.it.unimi.dsi.fastutil.objects.Reference2IntOpenHashMap;
 import org.mtr.mapping.holder.*;
 import org.mtr.mapping.mapper.GameRule;
 import org.mtr.mapping.mapper.MinecraftServerHelper;
@@ -50,7 +51,7 @@ import java.util.function.Consumer;
 
 public final class Init implements Utilities {
 
-	private static Main main;
+	private static volatile Main main;
 	private static int serverPort;
 	private static Runnable sendWorldTimeUpdate;
 	private static boolean canSendWorldTimeUpdate = true;
@@ -69,8 +70,13 @@ public final class Init implements Utilities {
 
 	private static final int MILLIS_PER_MC_DAY = SECONDS_PER_MC_HOUR * MILLIS_PER_SECOND * HOURS_PER_DAY;
 	private static final Object2ObjectArrayMap<ServerWorld, RailActionModule> RAIL_ACTION_MODULES = new Object2ObjectArrayMap<>();
+	private static final Reference2IntOpenHashMap<Object> WORLD_INDICES = new Reference2IntOpenHashMap<>();
 	private static final ObjectArrayList<String> WORLD_ID_LIST = new ObjectArrayList<>();
 	private static final Object2ObjectAVLTreeMap<UUID, Runnable> RIDING_PLAYERS = new Object2ObjectAVLTreeMap<>();
+
+	static {
+		WORLD_INDICES.defaultReturnValue(-1);
+	}
 
 	public static void init() {
 		LOGGER.info("Starting Minecraft with arguments:\n{}", String.join("\n", ManagementFactory.getRuntimeMXBean().getInputArguments()));
@@ -171,11 +177,14 @@ public final class Init implements Utilities {
 
 		// Register events
 		REGISTRY.eventRegistry.registerServerStarted(minecraftServer -> {
+			PacketCodecCapabilities.resetServer();
 			// Start up the backend
 			RAIL_ACTION_MODULES.clear();
+			WORLD_INDICES.clear();
 			WORLD_ID_LIST.clear();
 			MinecraftServerHelper.iterateWorlds(minecraftServer, serverWorld -> {
 				RAIL_ACTION_MODULES.put(serverWorld, new RailActionModule(serverWorld));
+				WORLD_INDICES.put(serverWorld.data, WORLD_ID_LIST.size());
 				WORLD_ID_LIST.add(getWorldId(new World(serverWorld.data)));
 			});
 
@@ -221,11 +230,24 @@ public final class Init implements Utilities {
 		});
 
 		REGISTRY.eventRegistry.registerServerStopping(minecraftServer -> {
-			if (main != null) {
-				main.stop();
+			try {
+				if (main != null) {
+					main.stop();
+				}
+			} finally {
+				main = null;
+				sendWorldTimeUpdate = null;
+				canSendWorldTimeUpdate = true;
+				Main.CLIENT_NAME_RESOLVER = null;
+				serverPort = 0;
+				RAIL_ACTION_MODULES.clear();
+				WORLD_INDICES.clear();
+				WORLD_ID_LIST.clear();
+				RIDING_PLAYERS.clear();
+				ArrivalsCacheServer.clear();
+				PacketCodecCapabilities.resetServer();
+				PacketUpdateLastRailStyles.SERVER_CACHE.clear();
 			}
-			serverPort = 0;
-			RIDING_PLAYERS.clear();
 		});
 
 		REGISTRY.eventRegistry.registerStartServerTick(() -> {
@@ -257,9 +279,12 @@ public final class Init implements Utilities {
 				railActionModule.tick();
 			}
 
-			if (main != null) {
-				final String dimension = getWorldId(new World(serverWorld.data));
-				main.processMessagesS2C(WORLD_ID_LIST.indexOf(dimension), queueObject -> MinecraftOperationProcessor.process(queueObject, serverWorld, dimension));
+			final Main currentMain = main;
+			if (currentMain != null) {
+				final int cachedDimensionIndex = getWorldIndex(serverWorld.data);
+				final String dimension = cachedDimensionIndex < 0 ? getWorldId(new World(serverWorld.data)) : WORLD_ID_LIST.get(cachedDimensionIndex);
+				final int dimensionIndex = cachedDimensionIndex < 0 ? WORLD_ID_LIST.indexOf(dimension) : cachedDimensionIndex;
+				currentMain.processMessagesS2C(dimensionIndex, queueObject -> MinecraftOperationProcessor.process(queueObject, serverWorld, dimension));
 			}
 		});
 
@@ -268,7 +293,10 @@ public final class Init implements Utilities {
 			// Sync vehicle speed limits to the joining player
 			PacketSyncSpeedLimits.sendToPlayer(serverPlayerEntity);
 		});
-		REGISTRY.eventRegistry.registerPlayerDisconnect((minecraftServer, serverPlayerEntity) -> RIDING_PLAYERS.remove(serverPlayerEntity.getUuid()));
+		REGISTRY.eventRegistry.registerPlayerDisconnect((minecraftServer, serverPlayerEntity) -> {
+			RIDING_PLAYERS.remove(serverPlayerEntity.getUuid());
+			PacketCodecCapabilities.removeClient(serverPlayerEntity.getUuid());
+		});
 
 		// Finish registration
 		REGISTRY.init();
@@ -291,8 +319,9 @@ public final class Init implements Utilities {
 	}
 
 	public static <T extends SerializedDataBase> void sendMessageC2S(String key, @Nullable MinecraftServer minecraftServer, @Nullable World world, SerializedDataBase data, @Nullable Consumer<T> consumer, @Nullable Class<T> responseDataClass) {
-		if (main != null) {
-			main.sendMessageC2S(world == null ? null : WORLD_ID_LIST.indexOf(getWorldId(world)), new QueueObject(key, data, consumer == null || minecraftServer == null ? null : responseData -> minecraftServer.execute(() -> consumer.accept(responseData)), responseDataClass));
+		final Main currentMain = main;
+		if (currentMain != null) {
+			currentMain.sendMessageC2S(world == null ? null : getWorldIndex(world), new QueueObject(key, data, consumer == null || minecraftServer == null ? null : responseData -> minecraftServer.execute(() -> consumer.accept(responseData)), responseDataClass));
 		}
 	}
 
@@ -323,7 +352,19 @@ public final class Init implements Utilities {
 
 	public static String getWorldId(World world) {
 		final Identifier identifier = MinecraftServerHelper.getWorldId(world);
-		return String.format("%s/%s", identifier.getNamespace(), identifier.getPath());
+		return identifier.getNamespace() + "/" + identifier.getPath();
+	}
+
+	private static int getWorldIndex(World world) {
+		final int worldIndex = getWorldIndex(world.data);
+		if (worldIndex >= 0) {
+			return worldIndex;
+		}
+		return WORLD_ID_LIST.indexOf(getWorldId(world));
+	}
+
+	private static int getWorldIndex(Object world) {
+		return WORLD_INDICES.getInt(world);
 	}
 
 	public static int findFreePort(int startingPort) {

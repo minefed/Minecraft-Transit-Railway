@@ -10,11 +10,9 @@ import org.mtr.mod.screen.DashboardListItem;
 
 public final class PacketBroadcastRailActions extends PacketHandler {
 
-	private final ObjectArrayList<RailAction> railActions;
 	private final ObjectArrayList<DashboardListItem> dashboardListItems;
 
 	public PacketBroadcastRailActions(PacketBufferReceiver packetBufferReceiver) {
-		railActions = new ObjectArrayList<>();
 		dashboardListItems = new ObjectArrayList<>();
 		final int actionCount = packetBufferReceiver.readInt();
 		for (int i = 0; i < actionCount; i++) {
@@ -22,18 +20,18 @@ public final class PacketBroadcastRailActions extends PacketHandler {
 		}
 	}
 
-	public PacketBroadcastRailActions(ObjectArrayList<RailAction> railActions) {
-		this.railActions = railActions;
+	public PacketBroadcastRailActions(Iterable<RailAction> railActions) {
 		dashboardListItems = new ObjectArrayList<>();
+		railActions.forEach(railAction -> dashboardListItems.add(new DashboardListItem(railAction.id, railAction.getDescription(), railAction.getColor())));
 	}
 
 	@Override
 	public void write(PacketBufferSender packetBufferSender) {
-		packetBufferSender.writeInt(railActions.size());
-		for (final RailAction railAction : railActions) {
-			packetBufferSender.writeLong(railAction.id);
-			packetBufferSender.writeString(railAction.getDescription());
-			packetBufferSender.writeInt(railAction.getColor());
+		packetBufferSender.writeInt(dashboardListItems.size());
+		for (final DashboardListItem dashboardListItem : dashboardListItems) {
+			packetBufferSender.writeLong(dashboardListItem.id);
+			packetBufferSender.writeString(dashboardListItem.getName(false));
+			packetBufferSender.writeInt(dashboardListItem.getColor(false));
 		}
 	}
 

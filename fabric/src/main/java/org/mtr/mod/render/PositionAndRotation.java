@@ -15,10 +15,24 @@ public final class PositionAndRotation {
 	public final int light;
 
 	public PositionAndRotation(Vector position, double yaw, double pitch) {
+		this(position, yaw, pitch, getLight(position));
+	}
+
+	private PositionAndRotation(Vector position, double yaw, double pitch, int light) {
 		this.position = position;
 		this.yaw = yaw;
 		this.pitch = pitch;
-		light = getLight(position);
+		this.light = light;
+	}
+
+	// Internal geometry-only paths never consume light. Public constructors keep
+	// sampling the world, including callers outside this rendering package.
+	static PositionAndRotation forTransform(Vector position, double yaw, double pitch) {
+		return new PositionAndRotation(position, yaw, pitch, 0);
+	}
+
+	static PositionAndRotation forBogieTransform(Vector position1, Vector position2, boolean hasPitch) {
+		return forTransform(Vector.getAverage(position1, position2), getYaw(position1, position2), hasPitch ? getPitch(position1, position2) : 0);
 	}
 
 	public PositionAndRotation(Vector position1, Vector position2, boolean hasPitch) {

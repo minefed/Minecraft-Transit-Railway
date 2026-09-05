@@ -3,6 +3,7 @@ package org.mtr.mod.resource;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 
 import javax.annotation.Nullable;
+import java.lang.ref.WeakReference;
 import java.util.function.Supplier;
 
 public final class CachedResource<T> {
@@ -15,12 +16,14 @@ public final class CachedResource<T> {
 	private final long lifespan;
 
 	private static boolean canFetchCache;
-	private static final ObjectArrayList<CachedResource<?>> CACHED_RESOURCES = new ObjectArrayList<>();
+	private static final ObjectArrayList<WeakReference<CachedResource<?>>> CACHED_RESOURCES = new ObjectArrayList<>();
 
 	public CachedResource(final Supplier<T> dataSupplier, final long lifespan) {
 		this.dataSupplier = dataSupplier;
 		this.lifespan = lifespan;
-		CACHED_RESOURCES.add(this);
+		synchronized (CACHED_RESOURCES) {
+			CACHED_RESOURCES.add(new WeakReference<>(this));
+		}
 	}
 
 	@Nullable
@@ -39,10 +42,15 @@ public final class CachedResource<T> {
 	public static void tick() {
 		canFetchCache = true;
 		final long currentMillis = System.currentTimeMillis();
-		CACHED_RESOURCES.forEach(cachedResource -> {
-			if (currentMillis > cachedResource.expiry) {
-				cachedResource.data = null;
+		synchronized (CACHED_RESOURCES) {
+			for (int i = CACHED_RESOURCES.size() - 1; i >= 0; i--) {
+				final CachedResource<?> cachedResource = CACHED_RESOURCES.get(i).get();
+				if (cachedResource == null) {
+					CACHED_RESOURCES.remove(i);
+				} else if (currentMillis > cachedResource.expiry) {
+					cachedResource.data = null;
+				}
 			}
-		});
+		}
 	}
 }

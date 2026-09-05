@@ -6,6 +6,7 @@ import org.mtr.core.serializer.JsonReader;
 import org.mtr.core.serializer.SerializedDataBase;
 import org.mtr.core.servlet.OperationProcessor;
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.mapping.tool.PacketBufferReceiver;
 import org.mtr.mod.client.MinecraftClientData;
 
@@ -18,11 +19,15 @@ public final class PacketRequestData extends PacketRequestResponseBase {
 	}
 
 	public PacketRequestData(DataRequest dataRequest) {
-		super(Utilities.getJsonObjectFromData(dataRequest).toString());
+		super(PacketCodecCapabilities.advertise(Utilities.getJsonObjectFromData(dataRequest)), PacketCodecCapabilities.canSendToServer());
 	}
 
 	private PacketRequestData(String content) {
 		super(content);
+	}
+
+	private PacketRequestData(JsonObject content) {
+		super(content, false);
 	}
 
 	@Override
@@ -32,6 +37,12 @@ public final class PacketRequestData extends PacketRequestResponseBase {
 
 	@Override
 	protected PacketRequestResponseBase getInstance(String content) {
+		return new PacketRequestData(content);
+	}
+
+	@Override
+	protected PacketRequestResponseBase getInstance(JsonObject content) {
+		// Keep the freshly serialized tree for binary encoding without parsing it again.
 		return new PacketRequestData(content);
 	}
 

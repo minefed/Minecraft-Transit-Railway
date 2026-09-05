@@ -1,0 +1,423 @@
+diff --git a/buildSrc/build.gradle b/buildSrc/build.gradle
+index 0f42d7cfa7826e50c52f71dd36e6f46bd00c552d..413bebdaaae300c0e2677bbb54c51230d7f2d653 100644
+--- a/buildSrc/build.gradle
++++ b/buildSrc/build.gradle
+@@ -11,6 +11,10 @@ dependencies {
+ 
+ java {
+ 	toolchain {
+-		languageVersion.set(JavaLanguageVersion.of(8))
++		languageVersion.set(JavaLanguageVersion.of(21))
+ 	}
+ }
++
++tasks.withType(JavaCompile).configureEach {
++	options.release.set(8)
++}
+diff --git a/common/build-standalone.gradle b/common/build-standalone.gradle
+new file mode 100644
+index 0000000000000000000000000000000000000000..c58b60851ee2a986f5ecd31c53e64429ca345c97
+--- /dev/null
++++ b/common/build-standalone.gradle
+@@ -0,0 +1,46 @@
++plugins {
++	id "java"
++}
++
++group = "org.mtr.mapping"
++version = "0.0.1"
++
++repositories {
++	mavenCentral()
++}
++
++dependencies {
++	compileOnly "com.google.code.findbugs:jsr305:3.0.2"
++	compileOnly "io.netty:netty-buffer:4.1.127.Final"
++	compileOnly "org.apache.logging.log4j:log4j-core:2.25.1"
++	testImplementation "io.netty:netty-buffer:4.1.127.Final"
++	testImplementation "org.apache.logging.log4j:log4j-core:2.25.1"
++	testImplementation "org.junit.jupiter:junit-jupiter:5.13.4"
++	testRuntimeOnly "org.junit.platform:junit-platform-launcher:1.13.4"
++}
++
++sourceSets {
++	test {
++		java.setSrcDirs(["src/test/java"])
++		java.include("org/mtr/mapping/tool/PacketBufferTest.java")
++	}
++}
++
++java {
++	toolchain {
++		languageVersion.set(JavaLanguageVersion.of(21))
++	}
++}
++
++tasks.withType(JavaCompile).configureEach {
++	options.release.set(8)
++}
++
++tasks.withType(AbstractArchiveTask).configureEach {
++	preserveFileTimestamps = false
++	reproducibleFileOrder = true
++}
++
++test {
++	useJUnitPlatform()
++}
+diff --git a/common/build.gradle b/common/build.gradle
+index 7c8a3e6e781bf7ea4a70de921f9034258df75b56..cd75c1f9703f4c33ae0c4c413af5a40db9304155 100644
+--- a/common/build.gradle
++++ b/common/build.gradle
+@@ -25,10 +25,14 @@ dependencies {
+ 
+ java {
+ 	toolchain {
+-		languageVersion.set(JavaLanguageVersion.of(8))
++		languageVersion.set(JavaLanguageVersion.of(21))
+ 	}
+ }
+ 
++tasks.withType(JavaCompile).configureEach {
++	options.release.set(8)
++}
++
+ build {
+ 	doLast {
+ 		buildTools.copyBuildFile(false)
+diff --git a/common/settings-standalone.gradle b/common/settings-standalone.gradle
+new file mode 100644
+index 0000000000000000000000000000000000000000..435ec9d604aa6b3939d59fbd8b2c9dfedb5696c6
+--- /dev/null
++++ b/common/settings-standalone.gradle
+@@ -0,0 +1,2 @@
++rootProject.name = "Minecraft-Mappings-common"
++rootProject.buildFileName = "build-standalone.gradle"
+diff --git a/common/src/main/java/org/mtr/mapping/tool/PacketBufferReceiver.java b/common/src/main/java/org/mtr/mapping/tool/PacketBufferReceiver.java
+index 79622093ac8c865ab75aad011380f6f30c3f0043..e4c3f38e80316a1e6b6752459e6512554fbf60e2 100644
+--- a/common/src/main/java/org/mtr/mapping/tool/PacketBufferReceiver.java
++++ b/common/src/main/java/org/mtr/mapping/tool/PacketBufferReceiver.java
+@@ -3,19 +3,29 @@ package org.mtr.mapping.tool;
+ import io.netty.buffer.ByteBuf;
+ import org.mtr.mapping.annotation.MappedMethod;
+ 
+-import java.util.HashMap;
+ import java.util.Map;
++import java.nio.charset.StandardCharsets;
++import java.util.concurrent.ConcurrentHashMap;
++import java.util.concurrent.ScheduledThreadPoolExecutor;
++import java.util.concurrent.TimeUnit;
++import java.util.concurrent.atomic.AtomicBoolean;
+ import java.util.function.Consumer;
+ 
+ public final class PacketBufferReceiver extends DummyClass {
+ 
+ 	private int receivedCount;
+ 	private int readIndex;
++	private volatile boolean terminal;
+ 	private final int count;
+ 	private final ByteBuf[] byteBufArray;
+ 	private final Consumer<PacketBufferReceiver> onComplete;
++	private volatile long lastReceivedNanos = System.nanoTime();
+ 
+-	private static final Map<Long, PacketBufferReceiver> RECEIVED_PACKETS = new HashMap<>();
++	private static final Map<Long, PacketBufferReceiver> RECEIVED_PACKETS = new ConcurrentHashMap<>();
++	private static final ScheduledThreadPoolExecutor TIMEOUT_EXECUTOR = createTimeoutExecutor();
++	private static final AtomicBoolean TIMEOUT_SWEEP_SCHEDULED = new AtomicBoolean();
++	private static final int HEADER_BYTES = 8 + 4 + 4;
++	private static final long PACKET_TIMEOUT_NANOS = TimeUnit.SECONDS.toNanos(30);
+ 
+ 	private PacketBufferReceiver(int count, Consumer<PacketBufferReceiver> onComplete) {
+ 		this.count = count;
+@@ -61,27 +71,58 @@ public final class PacketBufferReceiver extends DummyClass {
+ 
+ 	@MappedMethod
+ 	public String readString() {
+-		final int stringLength = readInt();
+-		final char[] characters = new char[stringLength];
+-		for (int i = 0; i < stringLength; i++) {
+-			characters[i] = readChar();
++		final int encodedLength = readInt();
++		if (encodedLength >= 0) {
++			final char[] characters = new char[encodedLength];
++			for (int i = 0; i < encodedLength; i++) {
++				characters[i] = readChar();
++			}
++			return new String(characters);
++		} else {
++			final int stringLength = ~encodedLength;
++			final byte[] bytes = new byte[stringLength];
++			readBytes(bytes);
++			return new String(bytes, StandardCharsets.UTF_8);
+ 		}
+-		return new String(characters);
+ 	}
+ 
+ 	private void read() {
+-		if (byteBufArray[readIndex].readableBytes() == 0) {
++		while (readIndex < byteBufArray.length && byteBufArray[readIndex].readableBytes() == 0) {
+ 			readIndex++;
+ 		}
++		if (readIndex >= byteBufArray.length) {
++			throw new IndexOutOfBoundsException("No packet data remaining");
++		}
++	}
++
++	private void readBytes(byte[] bytes) {
++		int offset = 0;
++		while (offset < bytes.length) {
++			read();
++			final int readLength = Math.min(byteBufArray[readIndex].readableBytes(), bytes.length - offset);
++			byteBufArray[readIndex].readBytes(bytes, offset, readLength);
++			offset += readLength;
++		}
+ 	}
+ 
+-	private boolean receive(int index, ByteBuf byteBuf) {
++	private synchronized boolean receive(int index, ByteBuf byteBuf) {
++		if (terminal || index < 0 || index >= count) {
++			byteBuf.release();
++			return terminal = true;
++		}
++		if (byteBufArray[index] != null) {
++			byteBuf.release();
++			return false;
++		}
+ 		byteBufArray[index] = byteBuf;
++		lastReceivedNanos = System.nanoTime();
+ 		receivedCount++;
+ 		if (receivedCount == count) {
+-			onComplete.accept(this);
+-			for (final ByteBuf currentByteBuf : byteBufArray) {
+-				currentByteBuf.release();
++			terminal = true;
++			try {
++				onComplete.accept(this);
++			} finally {
++				release();
+ 			}
+ 			return true;
+ 		} else {
+@@ -89,16 +130,90 @@ public final class PacketBufferReceiver extends DummyClass {
+ 		}
+ 	}
+ 
++	private boolean isExpired(long currentNanos) {
++		return currentNanos - lastReceivedNanos >= PACKET_TIMEOUT_NANOS;
++	}
++
++	private synchronized boolean expire(long currentNanos) {
++		if (terminal || !isExpired(currentNanos)) {
++			return false;
++		}
++		terminal = true;
++		release();
++		return true;
++	}
++
++	private synchronized void release() {
++		for (int i = 0; i < byteBufArray.length; i++) {
++			if (byteBufArray[i] != null) {
++				byteBufArray[i].release();
++				byteBufArray[i] = null;
++			}
++		}
++	}
++
+ 	@MappedMethod
+ 	public static void receive(ByteBuf byteBuf, Consumer<PacketBufferReceiver> onComplete, Consumer<Runnable> scheduler) {
+ 		final ByteBuf byteBufCopy = byteBuf.copy();
+ 		scheduler.accept(() -> {
++			if (byteBufCopy.readableBytes() < HEADER_BYTES) {
++				byteBufCopy.release();
++				return;
++			}
+ 			final long id = byteBufCopy.readLong();
+ 			final int index = byteBufCopy.readInt();
+ 			final int count = byteBufCopy.readInt();
+-			if (RECEIVED_PACKETS.computeIfAbsent(id, key -> new PacketBufferReceiver(count, onComplete)).receive(index, byteBufCopy)) {
+-				RECEIVED_PACKETS.remove(id);
++			if (count <= 0 || index < 0 || index >= count) {
++				byteBufCopy.release();
++				return;
++			}
++			final PacketBufferReceiver packetBufferReceiver = RECEIVED_PACKETS.computeIfAbsent(id, key -> new PacketBufferReceiver(count, onComplete));
++			scheduleTimeoutSweep();
++			if (packetBufferReceiver.count != count) {
++				byteBufCopy.release();
++				packetBufferReceiver.terminal = true;
++				packetBufferReceiver.release();
++				RECEIVED_PACKETS.remove(id, packetBufferReceiver);
++				return;
++			}
++			try {
++				if (packetBufferReceiver.receive(index, byteBufCopy)) {
++					RECEIVED_PACKETS.remove(id, packetBufferReceiver);
++				}
++			} catch (RuntimeException | Error throwable) {
++				RECEIVED_PACKETS.remove(id, packetBufferReceiver);
++				throw throwable;
++			}
++		});
++	}
++
++	private static void scheduleTimeoutSweep() {
++		if (TIMEOUT_SWEEP_SCHEDULED.compareAndSet(false, true)) {
++			TIMEOUT_EXECUTOR.schedule(PacketBufferReceiver::runTimeoutSweep, PACKET_TIMEOUT_NANOS, TimeUnit.NANOSECONDS);
++		}
++	}
++
++	private static void runTimeoutSweep() {
++		try {
++			final long currentNanos = System.nanoTime();
++			RECEIVED_PACKETS.entrySet().removeIf(entry -> entry.getValue().expire(currentNanos));
++		} finally {
++			TIMEOUT_SWEEP_SCHEDULED.set(false);
++			if (!RECEIVED_PACKETS.isEmpty()) {
++				scheduleTimeoutSweep();
+ 			}
++		}
++	}
++
++	private static ScheduledThreadPoolExecutor createTimeoutExecutor() {
++		final ScheduledThreadPoolExecutor executor = new ScheduledThreadPoolExecutor(1, runnable -> {
++			final Thread thread = new Thread(runnable, "mtr-packet-buffer-timeouts");
++			thread.setDaemon(true);
++			return thread;
+ 		});
++		executor.setRemoveOnCancelPolicy(true);
++		executor.setKeepAliveTime(1, TimeUnit.MINUTES);
++		executor.allowCoreThreadTimeOut(true);
++		return executor;
+ 	}
+ }
+diff --git a/common/src/main/java/org/mtr/mapping/tool/PacketBufferSender.java b/common/src/main/java/org/mtr/mapping/tool/PacketBufferSender.java
+index 2b0c132c3b3d96a4c1cbc20d99396f41f7b6e577..8e7b1200d9283eef2bbdc9be3d6c6de8eacd02fa 100644
+--- a/common/src/main/java/org/mtr/mapping/tool/PacketBufferSender.java
++++ b/common/src/main/java/org/mtr/mapping/tool/PacketBufferSender.java
+@@ -4,8 +4,10 @@ import io.netty.buffer.ByteBuf;
+ import org.mtr.mapping.annotation.MappedMethod;
+ 
+ import java.util.ArrayList;
++import java.util.ArrayDeque;
++import java.util.Deque;
+ import java.util.List;
+-import java.util.Random;
++import java.util.concurrent.ThreadLocalRandom;
+ import java.util.function.Consumer;
+ import java.util.function.Supplier;
+ 
+@@ -65,7 +67,7 @@ public final class PacketBufferSender extends DummyClass {
+ 	public void writeString(String data) {
+ 		final char[] characters = data.toCharArray();
+ 		writeInt(characters.length);
+-		for (char character : characters) {
++		for (final char character : characters) {
+ 			writeChar(character);
+ 		}
+ 	}
+@@ -73,8 +75,8 @@ public final class PacketBufferSender extends DummyClass {
+ 	@MappedMethod
+ 	public void send(Consumer<ByteBuf> consumer, Consumer<Runnable> scheduler) {
+ 		byteBufObjects.add(currentByteBuf);
+-		final long id = new Random().nextLong();
+-		final List<Runnable> queue = new ArrayList<>();
++		final long id = ThreadLocalRandom.current().nextLong();
++		final Deque<Runnable> queue = new ArrayDeque<>();
+ 		for (int i = 0; i < byteBufObjects.size(); i++) {
+ 			final ByteBuf byteBuf = byteBufObjects.get(i);
+ 			final int writerIndex = byteBuf.writerIndex();
+@@ -104,10 +106,10 @@ public final class PacketBufferSender extends DummyClass {
+ 		currentByteBuf.writeInt(0);
+ 	}
+ 
+-	private static void schedule(List<Runnable> queue, Consumer<Runnable> scheduler) {
++	private static void schedule(Deque<Runnable> queue, Consumer<Runnable> scheduler) {
+ 		if (!queue.isEmpty()) {
+ 			scheduler.accept(() -> {
+-				queue.remove(0).run();
++				queue.removeFirst().run();
+ 				schedule(queue, scheduler);
+ 			});
+ 		}
+diff --git a/common/src/test/java/org/mtr/mapping/tool/PacketBufferTest.java b/common/src/test/java/org/mtr/mapping/tool/PacketBufferTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..924d33064295254223fce37fde860c61dab9f57a
+--- /dev/null
++++ b/common/src/test/java/org/mtr/mapping/tool/PacketBufferTest.java
+@@ -0,0 +1,74 @@
++package org.mtr.mapping.tool;
++
++import io.netty.buffer.ByteBuf;
++import io.netty.buffer.Unpooled;
++import org.junit.jupiter.api.Test;
++
++import java.util.ArrayList;
++import java.util.Collections;
++import java.util.List;
++import java.util.concurrent.atomic.AtomicInteger;
++import java.util.concurrent.atomic.AtomicReference;
++import java.util.function.Consumer;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertTrue;
++
++public final class PacketBufferTest {
++
++	@Test
++	public void utf8RoundTripAcrossOutOfOrderFragments() {
++		final StringBuilder stringBuilder = new StringBuilder();
++		for (int i = 0; i < 20000; i++) {
++			stringBuilder.append("Rail-한글-🙂");
++		}
++		final String expected = stringBuilder.toString();
++		final List<ByteBuf> fragments = new ArrayList<>();
++		final PacketBufferSender sender = new PacketBufferSender(Unpooled::buffer);
++		sender.writeString(expected);
++		sender.writeLong(123456789L);
++		sender.send(fragments::add, Runnable::run);
++		assertTrue(fragments.size() > 1);
++
++		final AtomicReference<String> actual = new AtomicReference<>();
++		final AtomicInteger completions = new AtomicInteger();
++		Collections.reverse(fragments);
++		final ByteBuf duplicate = fragments.get(0).copy();
++		final Consumer<PacketBufferReceiver> onComplete = receiver -> {
++			actual.set(receiver.readString());
++			assertEquals(123456789L, receiver.readLong());
++			completions.incrementAndGet();
++		};
++		try {
++			PacketBufferReceiver.receive(duplicate, onComplete, Runnable::run);
++			for (final ByteBuf fragment : fragments) {
++				PacketBufferReceiver.receive(fragment, onComplete, Runnable::run);
++			}
++			assertEquals(expected, actual.get());
++			assertEquals(1, completions.get());
++		} finally {
++			duplicate.release();
++			fragments.forEach(ByteBuf::release);
++		}
++	}
++
++	@Test
++	public void readsLegacyUtf16Strings() {
++		final String expected = "legacy-철도";
++		final ByteBuf fragment = Unpooled.buffer();
++		fragment.writeLong(42);
++		fragment.writeInt(0);
++		fragment.writeInt(1);
++		fragment.writeInt(expected.length());
++		for (int i = 0; i < expected.length(); i++) {
++			fragment.writeChar(expected.charAt(i));
++		}
++		final AtomicReference<String> actual = new AtomicReference<>();
++		try {
++			PacketBufferReceiver.receive(fragment, receiver -> actual.set(receiver.readString()), Runnable::run);
++			assertEquals(expected, actual.get());
++		} finally {
++			fragment.release();
++		}
++	}
++}

@@ -73,17 +73,18 @@ public class VehicleExtension extends Vehicle implements Utilities {
 			return;
 		}
 
-		final int thisRouteColor = vehicleExtraData.getThisRouteColor();
-		final String thisRouteName = formatRouteName(vehicleExtraData.getThisRouteName());
-		final int nextRouteColor = vehicleExtraData.getNextRouteColor();
-		final String nextRouteName = formatRouteName(vehicleExtraData.getNextRouteName());
-		final String thisStationName = vehicleExtraData.getThisStationName();
-		final String nextStationName = vehicleExtraData.getNextStationName();
-		final String thisRouteDestination = vehicleExtraData.getThisRouteDestination();
-		final String nextRouteDestination = vehicleExtraData.getNextRouteDestination();
 		final long thisRouteId = vehicleExtraData.getThisRouteId();
 
 		if (VehicleRidingMovement.isRiding(id)) {
+			final int thisRouteColor = vehicleExtraData.getThisRouteColor();
+			final String thisRouteName = formatRouteName(vehicleExtraData.getThisRouteName());
+			final int nextRouteColor = vehicleExtraData.getNextRouteColor();
+			final String nextRouteName = formatRouteName(vehicleExtraData.getNextRouteName());
+			final String thisStationName = vehicleExtraData.getThisStationName();
+			final String nextStationName = vehicleExtraData.getNextStationName();
+			final String thisRouteDestination = vehicleExtraData.getThisRouteDestination();
+			final String nextRouteDestination = vehicleExtraData.getNextRouteDestination();
+
 			// Render client action bar floating text
 			if (VehicleRidingMovement.showShiftProgressBar()) {
 				if (speed * MILLIS_PER_SECOND > 5 || thisRouteName.isEmpty() || thisStationName.isEmpty() || thisRouteDestination.isEmpty()) {
@@ -213,6 +214,9 @@ public class VehicleExtension extends Vehicle implements Utilities {
 					final BlockPos offsetBlockPos = Init.newBlockPos(headPosition.x + xOffset, headPosition.y + yOffset, headPosition.z + zOffset);
 					final BlockState blockState = clientWorld.getBlockState(offsetBlockPos);
 					final Block block = blockState.getBlock();
+					if (!(block.data instanceof BlockTrainRedstoneSensor) && !(block.data instanceof BlockTrainAnnouncer && VehicleRidingMovement.isRiding(id))) {
+						continue;
+					}
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
 						if (block.data instanceof BlockTrainRedstoneSensor && IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED) < 2) {
 							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
