@@ -1,0 +1,19 @@
+plugins {
+	id "java"
+	id "com.gradleup.shadow" version "8.3.8"
+}
+
+configurations {
+	reverseRelocation
+}
+
+dependencies {
+	reverseRelocation files("/repo/libs/Shadow-Libraries-util-0.0.1.jar")
+}
+
+tasks.register("reverseRelocateFastutil", com.github.jengelman.gradle.plugins.shadow.tasks.ShadowJar) {
+	archiveFileName.set("Shadow-Libraries-util-reverse-relocated.jar")
+	destinationDirectory.set(layout.buildDirectory.dir("libs"))
+	configurations = [project.configurations.reverseRelocation]
+	relocate("org.mtr.libraries.it.unimi", "it.unimi")
+}

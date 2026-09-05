@@ -1,0 +1,13 @@
+allprojects {
+	afterEvaluate { evaluatedProject ->
+		if (evaluatedProject == rootProject) {
+			evaluatedProject.configurations.implementation.dependencies.removeIf { dependency ->
+				dependency.group == "it.unimi.dsi" && dependency.name == "fastutil"
+			}
+			evaluatedProject.dependencies.add(
+					"implementation",
+					evaluatedProject.files("/validation/build/libs/Shadow-Libraries-util-reverse-relocated.jar")
+			)
+		}
+	}
+}

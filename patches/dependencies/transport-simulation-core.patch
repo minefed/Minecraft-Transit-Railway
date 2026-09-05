@@ -1,0 +1,2345 @@
+diff --git a/build.gradle b/build.gradle
+index 016c7f9eb6b4a2aba76aa4f234941082386eee3d..afb6f1dc641ef19ae346c7c8c6b0b3ff0a601ebb 100644
+--- a/build.gradle
++++ b/build.gradle
+@@ -4,6 +4,7 @@ import org.mtr.core.WebserverSetup
+ plugins {
+ 	id "java"
+ 	id "maven-publish"
++	id "com.gradleup.shadow" version "8.3.8"
+ }
+ 
+ group "org.mtr.core"
+@@ -19,18 +20,21 @@ dependencies {
+ 	implementation "org.mtr:Shadow-Libraries-net:0.0.1"
+ 	implementation "org.mtr:Shadow-Libraries-util:0.0.1"
+ 	implementation "com.google.code.gson:gson:+"
+-	implementation "it.unimi.dsi:fastutil:+"
++	implementation "it.unimi.dsi:fastutil:8.5.16"
+ 	implementation "commons-io:commons-io:+"
+ 	implementation "org.apache.logging.log4j:log4j-core:2.24.+"
+ 	compileOnly "com.google.code.findbugs:jsr305:+"
+-	compileOnly "xyz.jpenilla:squaremap-api:+"
+-	compileOnly "net.kyori:adventure-api:+"
++	// Keep the Java 8-compatible API revisions that were current when this Core
++	// snapshot was published. The latest '+' revisions now require Java 21 and
++	// make Gradle reject the Java 8 target before javac runs.
++	compileOnly "xyz.jpenilla:squaremap-api:1.3.9"
++	compileOnly "net.kyori:adventure-api:4.25.0"
+ 	compileOnly "us.dynmap:DynmapCoreAPI:3.7-beta-6"
+-	testImplementation "org.junit.jupiter:junit-jupiter-api:+"
+-	testImplementation "org.junit.platform:junit-platform-launcher:+"
++	testImplementation "org.junit.jupiter:junit-jupiter-api:5.10.5"
++	testImplementation "org.junit.platform:junit-platform-launcher:1.10.5"
+ 	testImplementation "org.apache.httpcomponents:httpclient:+"
+ 	testCompileOnly "com.google.code.findbugs:jsr305:+"
+-	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:+"
++	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.10.5"
+ }
+ 
+ java {
+@@ -41,6 +45,18 @@ java {
+ 	withJavadocJar()
+ }
+ 
++configurations.configureEach {
++	resolutionStrategy.eachDependency { details ->
++		if (details.requested.group == "net.kyori" && details.requested.name.startsWith("adventure-")) {
++			details.useVersion "4.17.0"
++		}
++	}
++}
++
++tasks.withType(JavaCompile).configureEach {
++	options.release.set(8)
++}
++
+ publishing {
+ 	publications {
+ 		maven(MavenPublication) {
+@@ -55,6 +71,13 @@ jar {
+ 	}
+ }
+ 
++shadowJar {
++	archiveClassifier.set("relocated")
++	configurations = []
++	relocate("com.google", "org.mtr.libraries.com.google")
++	relocate("it.unimi", "org.mtr.libraries.it.unimi")
++}
++
+ test {
+ 	useJUnitPlatform()
+ 	testLogging { showStandardStreams = true }
+diff --git a/src/main/java/org/mtr/core/data/AreaBase.java b/src/main/java/org/mtr/core/data/AreaBase.java
+index 10616879dbb15627b0749703a64866b8731f1314..604e1928ef58e5888ceb071d5bfc67a0d1090a8f 100644
+--- a/src/main/java/org/mtr/core/data/AreaBase.java
++++ b/src/main/java/org/mtr/core/data/AreaBase.java
+@@ -91,7 +91,11 @@ public abstract class AreaBase<T extends AreaBase<T, U>, U extends SavedRailBase
+ 		final long x2 = areaBase.position2.getX();
+ 		final long y2 = areaBase.position2.getY();
+ 		final long z2 = areaBase.position2.getZ();
+-		return inArea(areaBase.position1) || inArea(areaBase.position2) || inArea(new Position(x1, y1, z2)) || inArea(new Position(x1, y2, z1)) || inArea(new Position(x1, y2, z2)) || inArea(new Position(x2, y1, z1)) || inArea(new Position(x2, y1, z2)) || inArea(new Position(x2, y2, z1));
++		return inArea(x1, y1, z1) || inArea(x2, y2, z2) || inArea(x1, y1, z2) || inArea(x1, y2, z1) || inArea(x1, y2, z2) || inArea(x2, y1, z1) || inArea(x2, y1, z2) || inArea(x2, y2, z1);
++	}
++
++	private boolean inArea(long x, long y, long z) {
++		return Utilities.isBetween(x, position1.getX(), position2.getX()) && Utilities.isBetween(y, position1.getY(), position2.getY()) && Utilities.isBetween(z, position1.getZ(), position2.getZ());
+ 	}
+ 
+ 	public static <T extends AreaBase<T, U>, U extends SavedRailBase<U, T>> boolean validCorners(@Nullable AreaBase<T, U> areaBase) {
+diff --git a/src/main/java/org/mtr/core/data/Data.java b/src/main/java/org/mtr/core/data/Data.java
+index 409f181ba533274c1865bb0100399ab10bb9ec50..05c2e5d0b97596c6481ba5e45aa608a61ca2032d 100644
+--- a/src/main/java/org/mtr/core/data/Data.java
++++ b/src/main/java/org/mtr/core/data/Data.java
+@@ -2,6 +2,7 @@ package org.mtr.core.data;
+ 
+ import it.unimi.dsi.fastutil.longs.Long2ObjectMap;
+ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
++import it.unimi.dsi.fastutil.ints.IntArrayList;
+ import it.unimi.dsi.fastutil.objects.*;
+ import org.mtr.core.Main;
+ import org.mtr.core.map.UpdateDynmap;
+@@ -9,10 +10,13 @@ import org.mtr.core.map.UpdateSquaremap;
+ import org.mtr.core.serializer.SerializedDataBaseWithId;
+ import org.mtr.core.simulation.Simulator;
+ 
++import java.util.BitSet;
+ import java.util.Collection;
+ import java.util.Map;
++import java.util.function.Consumer;
+ import java.util.function.Function;
+ import java.util.function.Supplier;
++import java.util.function.ToLongFunction;
+ 
+ public abstract class Data {
+ 
+@@ -39,6 +43,12 @@ public abstract class Data {
+ 	public final ObjectOpenHashSet<Position> runwaysOutbound = new ObjectOpenHashSet<>();
+ 	public final Long2ObjectOpenHashMap<Position> platformIdToPosition = new Long2ObjectOpenHashMap<>();
+ 
++	private final SpatialIndex<Station> stationSpatialIndex = new SpatialIndex<>(Station::getMinX, Station::getMinZ, Station::getMaxX, Station::getMaxZ);
++	private final SpatialIndex<Platform> platformSpatialIndex = new SpatialIndex<>(Platform::getMinX, Platform::getMinZ, Platform::getMaxX, Platform::getMaxZ);
++	private final SpatialIndex<Siding> sidingSpatialIndex = new SpatialIndex<>(Siding::getMinX, Siding::getMinZ, Siding::getMaxX, Siding::getMaxZ);
++	private final SpatialIndex<Depot> depotSpatialIndex = new SpatialIndex<>(Depot::getMinX, Depot::getMinZ, Depot::getMaxX, Depot::getMaxZ);
++	private final SpatialIndex<Rail> railSpatialIndex = new SpatialIndex<>(rail -> rail.railMath.minX, rail -> rail.railMath.minZ, rail -> rail.railMath.maxX, rail -> rail.railMath.maxZ);
++
+ 	public void sync() {
+ 		try {
+ 			// clear rail connections
+@@ -46,6 +56,8 @@ public abstract class Data {
+ 			positionsToRail.clear();
+ 			rails.forEach(rail -> rail.writePositionsToRailCache(positionsToRail));
+ 			rails.forEach(rail -> rail.writeConnectedRailsCacheFromMap(positionsToRail));
++			rails.forEach(Rail::clearSignalBlockCache);
++			rails.forEach(Rail::writeSignalBlockCache);
+ 
+ 			// clear runways
+ 			// write runways
+@@ -87,8 +99,14 @@ public abstract class Data {
+ 			mapIds(liftIdMap, lifts);
+ 			mapIds(railIdMap, rails);
+ 
+-			mapAreasAndSavedRails(platforms, stations);
+-			mapAreasAndSavedRails(sidings, depots);
++			stationSpatialIndex.rebuild(stations);
++			platformSpatialIndex.rebuild(platforms);
++			sidingSpatialIndex.rebuild(sidings);
++			depotSpatialIndex.rebuild(depots);
++			railSpatialIndex.rebuild(railIdMap.values());
++
++			mapAreasAndSavedRails(platforms, stations, stationSpatialIndex);
++			mapAreasAndSavedRails(sidings, depots, depotSpatialIndex);
+ 
+ 			// clear platform routes
+ 			// clear platform route colors
+@@ -126,7 +144,7 @@ public abstract class Data {
+ 			// write station connections
+ 			stations.forEach(station1 -> {
+ 				station1.connectedStations.clear();
+-				stations.forEach(station2 -> {
++				stationSpatialIndex.forEach(station1.getMinX(), station1.getMinZ(), station1.getMaxX(), station1.getMaxZ(), station2 -> {
+ 					if (station1 != station2 && station1.intersecting(station2)) {
+ 						station1.connectedStations.add(station2);
+ 					}
+@@ -156,6 +174,26 @@ public abstract class Data {
+ 		return currentMillis;
+ 	}
+ 
++	public void iterateStationsNear(Position position, double radius, Consumer<Station> consumer) {
++		stationSpatialIndex.forEach(position, radius, consumer);
++	}
++
++	public void iteratePlatformsNear(Position position, double radius, Consumer<Platform> consumer) {
++		platformSpatialIndex.forEach(position, radius, consumer);
++	}
++
++	public void iterateSidingsNear(Position position, double radius, Consumer<Siding> consumer) {
++		sidingSpatialIndex.forEach(position, radius, consumer);
++	}
++
++	public void iterateDepotsNear(Position position, double radius, Consumer<Depot> consumer) {
++		depotSpatialIndex.forEach(position, radius, consumer);
++	}
++
++	public void iterateRailsNear(Position position, double radius, Consumer<Rail> consumer) {
++		railSpatialIndex.forEach(position, radius, consumer);
++	}
++
+ 	protected final void setCurrentMillis(long currentMillis) {
+ 		this.currentMillis = currentMillis;
+ 	}
+@@ -220,18 +258,106 @@ public abstract class Data {
+ 		source.forEach(data -> map.put(data.getHexId(), data));
+ 	}
+ 
+-	private static <U extends SavedRailBase<U, V>, V extends AreaBase<V, U>> void mapAreasAndSavedRails(ObjectArraySet<U> savedRails, ObjectArraySet<V> areas) {
++	private static <U extends SavedRailBase<U, V>, V extends AreaBase<V, U>> void mapAreasAndSavedRails(ObjectArraySet<U> savedRails, ObjectArraySet<V> areas, SpatialIndex<V> areaSpatialIndex) {
+ 		areas.forEach(area -> area.savedRails.clear());
+ 		savedRails.forEach(savedRail -> {
+ 			savedRail.area = null;
+ 			final Position pos = savedRail.getMidPosition();
+-			for (final V area : areas) {
+-				if (area.isTransportMode(savedRail) && area.inArea(pos)) {
++			areaSpatialIndex.forEach(pos, 0, area -> {
++				if (savedRail.area == null && area.isTransportMode(savedRail) && area.inArea(pos)) {
+ 					savedRail.area = area;
+ 					area.savedRails.add(savedRail);
+-					break;
+ 				}
+-			}
++			});
+ 		});
+ 	}
++
++	private static final class SpatialIndex<T> {
++
++		private final ToLongFunction<T> minXGetter;
++		private final ToLongFunction<T> minZGetter;
++		private final ToLongFunction<T> maxXGetter;
++		private final ToLongFunction<T> maxZGetter;
++		private final ObjectArrayList<T> orderedData = new ObjectArrayList<>();
++		private final Long2ObjectOpenHashMap<IntArrayList> cells = new Long2ObjectOpenHashMap<>();
++		private final IntArrayList globalIndices = new IntArrayList();
++
++		private static final int CELL_SIZE = 256;
++		private static final long MAX_CELLS = 4096;
++
++		private SpatialIndex(ToLongFunction<T> minXGetter, ToLongFunction<T> minZGetter, ToLongFunction<T> maxXGetter, ToLongFunction<T> maxZGetter) {
++			this.minXGetter = minXGetter;
++			this.minZGetter = minZGetter;
++			this.maxXGetter = maxXGetter;
++			this.maxZGetter = maxZGetter;
++		}
++
++		private void rebuild(Collection<T> data) {
++			orderedData.clear();
++			orderedData.addAll(data);
++			cells.clear();
++			globalIndices.clear();
++			for (int index = 0; index < orderedData.size(); index++) {
++				final T value = orderedData.get(index);
++				final long minCellX = Math.floorDiv(minXGetter.applyAsLong(value), CELL_SIZE);
++				final long minCellZ = Math.floorDiv(minZGetter.applyAsLong(value), CELL_SIZE);
++				final long maxCellX = Math.floorDiv(maxXGetter.applyAsLong(value), CELL_SIZE);
++				final long maxCellZ = Math.floorDiv(maxZGetter.applyAsLong(value), CELL_SIZE);
++				if (!canIndex(minCellX, minCellZ, maxCellX, maxCellZ)) {
++					globalIndices.add(index);
++					continue;
++				}
++				for (long cellX = minCellX; cellX <= maxCellX; cellX++) {
++					for (long cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
++						cells.computeIfAbsent(getCellKey(cellX, cellZ), key -> new IntArrayList()).add(index);
++					}
++				}
++			}
++		}
++
++		private void forEach(Position position, double radius, Consumer<T> consumer) {
++			forEach(
++					(long) Math.floor(position.getX() - radius), (long) Math.floor(position.getZ() - radius),
++					(long) Math.ceil(position.getX() + radius), (long) Math.ceil(position.getZ() + radius), consumer
++			);
++		}
++
++		private void forEach(long minX, long minZ, long maxX, long maxZ, Consumer<T> consumer) {
++			final long minCellX = Math.floorDiv(minX, CELL_SIZE);
++			final long minCellZ = Math.floorDiv(minZ, CELL_SIZE);
++			final long maxCellX = Math.floorDiv(maxX, CELL_SIZE);
++			final long maxCellZ = Math.floorDiv(maxZ, CELL_SIZE);
++			if (!canIndex(minCellX, minCellZ, maxCellX, maxCellZ)) {
++				orderedData.forEach(consumer);
++				return;
++			}
++
++			final BitSet candidateIndices = new BitSet(orderedData.size());
++			globalIndices.forEach(candidateIndices::set);
++			for (long cellX = minCellX; cellX <= maxCellX; cellX++) {
++				for (long cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
++					final IntArrayList indices = cells.get(getCellKey(cellX, cellZ));
++					if (indices != null) {
++						indices.forEach(candidateIndices::set);
++					}
++				}
++			}
++			for (int index = candidateIndices.nextSetBit(0); index >= 0; index = candidateIndices.nextSetBit(index + 1)) {
++				consumer.accept(orderedData.get(index));
++			}
++		}
++
++		private static boolean canIndex(long minCellX, long minCellZ, long maxCellX, long maxCellZ) {
++			if (minCellX < Integer.MIN_VALUE || maxCellX > Integer.MAX_VALUE || minCellZ < Integer.MIN_VALUE || maxCellZ > Integer.MAX_VALUE) {
++				return false;
++			}
++			final long width = maxCellX - minCellX + 1;
++			final long depth = maxCellZ - minCellZ + 1;
++			return width > 0 && depth > 0 && width <= MAX_CELLS && depth <= MAX_CELLS && width * depth <= MAX_CELLS;
++		}
++
++		private static long getCellKey(long cellX, long cellZ) {
++			return cellX << 32 ^ cellZ & 0xFFFFFFFFL;
++		}
++	}
+ }
+diff --git a/src/main/java/org/mtr/core/data/InterchangeColorsForStationName.java b/src/main/java/org/mtr/core/data/InterchangeColorsForStationName.java
+index 9da60c35132fdd53a92361a9fbf8e4a28b21eb42..9f77c0be2689a5a897fb4b17454b846bb242dd98 100644
+--- a/src/main/java/org/mtr/core/data/InterchangeColorsForStationName.java
++++ b/src/main/java/org/mtr/core/data/InterchangeColorsForStationName.java
+@@ -27,6 +27,12 @@ public class InterchangeColorsForStationName extends InterchangeColorsForStation
+ 		return stationName;
+ 	}
+ 
++	InterchangeColorsForStationName copy() {
++		final InterchangeColorsForStationName copy = new InterchangeColorsForStationName(stationName);
++		interchangeRouteNamesForColorList.forEach(interchangeRouteNamesForColor -> copy.addColor(interchangeRouteNamesForColor.copy()));
++		return copy;
++	}
++
+ 	@FunctionalInterface
+ 	public interface ColorConsumer {
+ 		void accept(int color, InterchangeRouteNamesForColor interchangeRouteNamesForColor);
+diff --git a/src/main/java/org/mtr/core/data/InterchangeRouteNamesForColor.java b/src/main/java/org/mtr/core/data/InterchangeRouteNamesForColor.java
+index 2e71683255e51734a4d850e3efc84381ccd02e19..f6a8c50e2e1dc19ffc8222d8ed1057bb3c60d503 100644
+--- a/src/main/java/org/mtr/core/data/InterchangeRouteNamesForColor.java
++++ b/src/main/java/org/mtr/core/data/InterchangeRouteNamesForColor.java
+@@ -37,6 +37,12 @@ public final class InterchangeRouteNamesForColor extends InterchangeRouteNamesFo
+ 		this.routeNames.addAll(routeNames);
+ 	}
+ 
++	InterchangeRouteNamesForColor copy() {
++		final InterchangeRouteNamesForColor copy = new InterchangeRouteNamesForColor(color);
++		copy.routeNames.addAll(routeNames);
++		return copy;
++	}
++
+ 	@Override
+ 	public int compareTo(InterchangeRouteNamesForColor interchangeRouteNamesForColor) {
+ 		return Long.compare(color, interchangeRouteNamesForColor.color);
+diff --git a/src/main/java/org/mtr/core/data/Lift.java b/src/main/java/org/mtr/core/data/Lift.java
+index 08de1064dd90cdd3baddc8994f8e8139105aedab..b04813c4f3a3b882bd1d0b2e5d3148587df4bb92 100644
+--- a/src/main/java/org/mtr/core/data/Lift.java
++++ b/src/main/java/org/mtr/core/data/Lift.java
+@@ -68,34 +68,33 @@ public class Lift extends LiftSchema implements Utilities {
+ 			if (instructions.isEmpty()) {
+ 				speed = Math.max(Math.abs(speed) - Siding.ACCELERATION_DEFAULT * millisElapsed, 0) * Math.signum(speed);
+ 			} else {
+-				final long nextInstructionProgress = getProgress(instructions.getFirst().getFloor());
++				final long nextInstructionProgress = getProgress(instructions.get(0).getFloor());
+ 
+ 				if (speed * speed / 2 / Siding.ACCELERATION_DEFAULT > Math.abs(nextInstructionProgress - railProgress)) {
+ 					speed = Math.max(Math.abs(speed) - Siding.ACCELERATION_DEFAULT * millisElapsed, Siding.ACCELERATION_DEFAULT) * Math.signum(speed);
+ 				} else {
+-					speed = Math.clamp(speed + Siding.ACCELERATION_DEFAULT * millisElapsed * Math.signum(nextInstructionProgress - railProgress), -MAX_SPEED, MAX_SPEED);
++					speed = Utilities.clamp(speed + Siding.ACCELERATION_DEFAULT * millisElapsed * Math.signum(nextInstructionProgress - railProgress), -MAX_SPEED, MAX_SPEED);
+ 				}
+ 
+ 				if (Math.abs(railProgress - nextInstructionProgress) <= Math.abs(speed * millisElapsed)) {
+ 					railProgress = nextInstructionProgress;
+ 					speed = 0;
+ 					if (!isClientside) {
+-						instructions.removeFirst();
++						instructions.remove(0);
+ 						stoppingCoolDown = STOPPING_TIME;
+ 						needsUpdate = true;
+ 					}
+ 				}
+ 			}
+ 
+-			railProgress = Math.clamp(railProgress + speed * millisElapsed, 0, getProgress(Integer.MAX_VALUE));
++			railProgress = Utilities.clamp(railProgress + speed * millisElapsed, 0, getProgress(Integer.MAX_VALUE));
+ 		}
+ 
+ 		if (data instanceof Simulator) {
+-			((Simulator) data).clients.forEach(client -> {
+-				if (Utilities.isBetween(client.getPosition(), minPosition, maxPosition, client.getUpdateRadius())) {
+-					client.update(this, needsUpdate);
+-				}
+-			});
++			((Simulator) data).forEachClientNear(
++					minPosition.getX(), minPosition.getY(), minPosition.getZ(), maxPosition.getX(), maxPosition.getY(), maxPosition.getZ(),
++					client -> client.update(this, needsUpdate)
++			);
+ 
+ 			needsUpdate = false;
+ 		}
+@@ -254,7 +253,7 @@ public class Lift extends LiftSchema implements Utilities {
+ 		if (instructions.isEmpty()) {
+ 			return LiftDirection.NONE;
+ 		} else {
+-			return LiftDirection.fromDifference(getProgress(instructions.getFirst().getFloor()) - railProgress);
++			return LiftDirection.fromDifference(getProgress(instructions.get(0).getFloor()) - railProgress);
+ 		}
+ 	}
+ 
+@@ -350,7 +349,7 @@ public class Lift extends LiftSchema implements Utilities {
+ 	 * @return the distance along the track from the very first floor
+ 	 */
+ 	private long getProgress(int floor) {
+-		return distances.isEmpty() ? 0 : distances.getLong(Math.clamp(floor, 0, distances.size() - 1));
++		return distances.isEmpty() ? 0 : distances.getLong(Utilities.clamp(floor, 0, distances.size() - 1));
+ 	}
+ 
+ 	private <T> T currentFloorCallback(PercentageCallback<T> percentageCallback, T defaultValue) {
+diff --git a/src/main/java/org/mtr/core/data/PathData.java b/src/main/java/org/mtr/core/data/PathData.java
+index 0abc719c98165dbad1dfffe695e2cc1c47e86c4e..20034635c4d2c7bc223162a98a099a3d92386d5c 100644
+--- a/src/main/java/org/mtr/core/data/PathData.java
++++ b/src/main/java/org/mtr/core/data/PathData.java
+@@ -1,6 +1,8 @@
+ package org.mtr.core.data;
+ 
+ import it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
++import it.unimi.dsi.fastutil.ints.IntCollection;
++import it.unimi.dsi.fastutil.ints.IntSet;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import it.unimi.dsi.fastutil.objects.ObjectList;
+ import it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
+@@ -31,6 +33,14 @@ public class PathData extends PathDataSchema implements ConditionalList {
+ 		speedLimit = oldPathData.speedLimit;
+ 	}
+ 
++	PathData detachedCopy() {
++		final PathData pathData = new PathData(null, savedRailBaseId, dwellTime, stopIndex, startDistance, endDistance, startPosition, startAngle, endPosition, endAngle);
++		pathData.shape = shape;
++		pathData.verticalRadius = verticalRadius;
++		pathData.speedLimit = speedLimit;
++		return pathData;
++	}
++
+ 	public PathData(@Nullable Rail rail, long savedRailBaseId, long dwellTime, long stopIndex, double startDistance, double endDistance, Position startPosition, Angle startAngle, Position endPosition, Angle endAngle) {
+ 		super(savedRailBaseId, dwellTime, stopIndex, startDistance, endDistance, startPosition, startAngle, endPosition, endAngle);
+ 		this.rail = rail;
+@@ -117,7 +127,7 @@ public class PathData extends PathDataSchema implements ConditionalList {
+ 			return rail.railMath.getPosition(rawValue, reversePositions);
+ 		} else {
+ 			// TODO better positioning when vehicle is moving too quickly
+-			final double ratio = Math.clamp(rawValue / getRailLength(), 0, 1);
++			final double ratio = Utilities.clamp(rawValue / getRailLength(), 0, 1);
+ 			return new Vector(
+ 					startPosition.getX() + ratio * (endPosition.getX() - startPosition.getX()) + 0.5,
+ 					startPosition.getY() + ratio * (endPosition.getY() - startPosition.getY()),
+@@ -138,6 +148,14 @@ public class PathData extends PathDataSchema implements ConditionalList {
+ 		return getRail().getSignalColors();
+ 	}
+ 
++	void copySignalColors(IntCollection destination) {
++		getRail().copySignalColors(destination);
++	}
++
++	boolean hasSignalColor(IntSet colors) {
++		return getRail().hasSignalColor(colors);
++	}
++
+ 	private void writePathCache(Data data) {
+ 		rail = Data.tryGet(data.positionsToRail, startPosition, endPosition);
+ 		if (rail == null) {
+diff --git a/src/main/java/org/mtr/core/data/Rail.java b/src/main/java/org/mtr/core/data/Rail.java
+index 0ddfe09d7e58d6eb66f40c1841ef64825fc65f54..972e3223dfe68dfcf6445e1b96e7be10e985bfe7 100644
+--- a/src/main/java/org/mtr/core/data/Rail.java
++++ b/src/main/java/org/mtr/core/data/Rail.java
+@@ -1,7 +1,8 @@
+ package org.mtr.core.data;
+ 
+-import it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
++import it.unimi.dsi.fastutil.ints.*;
+ import it.unimi.dsi.fastutil.longs.Long2LongAVLTreeMap;
++import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.LongArrayList;
+ import it.unimi.dsi.fastutil.longs.LongConsumer;
+ import it.unimi.dsi.fastutil.objects.*;
+@@ -25,10 +26,13 @@ public final class Rail extends RailSchema {
+ 	private final Long2LongAVLTreeMap currentlyBlockedVehicleIds = new Long2LongAVLTreeMap();
+ 	private final Long2LongAVLTreeMap preBlockedVehicleIdsOld = new Long2LongAVLTreeMap();
+ 	private final Long2LongAVLTreeMap currentlyBlockedVehicleIdsOld = new Long2LongAVLTreeMap();
++	private final Long2ObjectOpenHashMap<ObjectArrayList<Rail>> signalBlockRails = new Long2ObjectOpenHashMap<>();
+ 	private final LongArrayList manualBlockColors = new LongArrayList();
+ 	private final boolean reversePositions;
++	private long signalBlockCacheGeneration;
+ 
+ 	private static final int MANUAL_BLOCK_DURATION = 1000;
++	private static volatile long signalCacheGeneration;
+ 
+ 	public static Rail newRail(Position position1, Angle angle1, Position position2, Angle angle2, Shape shape, double verticalRadius, ObjectArrayList<String> styles, long speedLimit1, long speedLimit2, boolean isPlatform, boolean isSiding, boolean canAccelerate, boolean canConnectRemotely, boolean canHaveSignal, TransportMode transportMode) {
+ 		return new Rail(position1, angle1, position2, angle2, shape, verticalRadius, styles, speedLimit1, speedLimit2, isPlatform, isSiding, canAccelerate, false, canConnectRemotely, canHaveSignal, transportMode);
+@@ -168,11 +172,7 @@ public final class Rail extends RailSchema {
+ 
+ 	public void tick1(Simulator simulator) {
+ 		final boolean needsUpdate = !Utilities.sameItems(preBlockedVehicleIds.keySet(), preBlockedVehicleIdsOld.keySet()) || !Utilities.sameItems(currentlyBlockedVehicleIds.keySet(), currentlyBlockedVehicleIdsOld.keySet());
+-		simulator.clients.forEach(client -> {
+-			if (closeTo(client.getPosition(), client.getUpdateRadius())) {
+-				client.update(this, needsUpdate);
+-			}
+-		});
++		simulator.forEachClientNear(railMath.minX, railMath.minY, railMath.minZ, railMath.maxX, railMath.maxY, railMath.maxZ, client -> client.update(this, needsUpdate));
+ 
+ 		preBlockedVehicleIdsOld.clear();
+ 		preBlockedVehicleIdsOld.putAll(preBlockedVehicleIds);
+@@ -186,7 +186,7 @@ public final class Rail extends RailSchema {
+ 	public void tick2(long millisElapsed) {
+ 		if (manualBlockCooldown > 0) {
+ 			if (isNotBlocked(preBlockedVehicleIds, 0) && isNotBlocked(currentlyBlockedVehicleIds, 0) && isNotBlocked(preBlockedVehicleIdsOld, 0) && isNotBlocked(currentlyBlockedVehicleIdsOld, 0)) {
+-				manualBlockColors.forEach(color -> reserveRail(0, color, new ObjectOpenHashSet<>(), this, true));
++					manualBlockColors.forEach(color -> reserveSignalBlock(0, color, true));
+ 			}
+ 			manualBlockCooldown = Math.max(0, manualBlockCooldown - millisElapsed);
+ 		}
+@@ -215,9 +215,25 @@ public final class Rail extends RailSchema {
+ 		return returnSet;
+ 	}
+ 
++	void copySignalColors(IntCollection destination) {
++		for (int i = 0; i < signalColors.size(); i++) {
++			destination.add((int) signalColors.getLong(i));
++		}
++	}
++
++	boolean hasSignalColor(IntSet colors) {
++		for (int i = 0; i < signalColors.size(); i++) {
++			if (colors.contains((int) signalColors.getLong(i))) {
++				return true;
++			}
++		}
++		return false;
++	}
++
+ 	public void copySignalColors(Rail rail) {
+ 		signalColors.clear();
+ 		signalColors.addAll(rail.signalColors);
++		signalCacheGeneration++;
+ 	}
+ 
+ 	public void iteratePreBlockedSignalColors(LongConsumer consumer) {
+@@ -236,6 +252,7 @@ public final class Rail extends RailSchema {
+ 				signalColors.removeIf(signalModification.getSignalColorsRemove()::contains);
+ 			}
+ 			signalModification.getSignalColorsAdd().forEach(signalColors::add);
++			signalCacheGeneration++;
+ 		}
+ 	}
+ 
+@@ -261,7 +278,7 @@ public final class Rail extends RailSchema {
+ 	boolean isBlocked(long vehicleId, BlockReservation blockReservation) {
+ 		if (signalColors.isEmpty() || isNotBlocked(preBlockedVehicleIds, vehicleId) && isNotBlocked(currentlyBlockedVehicleIds, vehicleId) && isNotBlocked(preBlockedVehicleIdsOld, vehicleId) && isNotBlocked(currentlyBlockedVehicleIdsOld, vehicleId)) {
+ 			if (blockReservation != BlockReservation.DO_NOT_RESERVE) {
+-				signalColors.forEach(color -> reserveRail(vehicleId, color, new ObjectOpenHashSet<>(), this, blockReservation == BlockReservation.CURRENTLY_RESERVE));
++				signalColors.forEach(color -> reserveSignalBlock(vehicleId, color, blockReservation == BlockReservation.CURRENTLY_RESERVE));
+ 			}
+ 			return false;
+ 		} else {
+@@ -281,7 +298,11 @@ public final class Rail extends RailSchema {
+ 
+ 	private void writeConnectedRailsCacheFromMap(Object2ObjectOpenHashMap<Position, Object2ObjectOpenHashMap<Position, Rail>> positionsToRail, Position position, ObjectOpenHashSet<Rail> connectedRails) {
+ 		connectedRails.clear();
+-		positionsToRail.getOrDefault(position, new Object2ObjectOpenHashMap<>()).forEach((connectedPosition, rail) -> {
++		final Object2ObjectOpenHashMap<Position, Rail> railsAtPosition = positionsToRail.get(position);
++		if (railsAtPosition == null) {
++			return;
++		}
++		railsAtPosition.forEach((connectedPosition, rail) -> {
+ 			if (!equals(rail)) {
+ 				connectedRails.add(rail);
+ 			}
+@@ -301,6 +322,39 @@ public final class Rail extends RailSchema {
+ 		);
+ 	}
+ 
++	void clearSignalBlockCache() {
++		signalBlockRails.clear();
++		signalBlockCacheGeneration = signalCacheGeneration;
++	}
++
++	void writeSignalBlockCache() {
++		for (int i = 0; i < signalColors.size(); i++) {
++			final long color = signalColors.getLong(i);
++			if (!signalBlockRails.containsKey(color)) {
++				final ObjectArrayList<Rail> rails = new ObjectArrayList<>();
++				collectSignalBlock(color, new ObjectOpenHashSet<>(), this, rails);
++				rails.forEach(rail -> rail.signalBlockRails.put(color, rails));
++			}
++		}
++	}
++
++	private void reserveSignalBlock(long vehicleId, long color, boolean currentlyBlocked) {
++		final ObjectArrayList<Rail> rails = signalBlockCacheGeneration == signalCacheGeneration ? signalBlockRails.get(color) : null;
++		if (rails == null) {
++			reserveRail(vehicleId, color, new ObjectOpenHashSet<>(), this, currentlyBlocked);
++		} else {
++			rails.forEach(rail -> (currentlyBlocked ? rail.currentlyBlockedVehicleIds : rail.preBlockedVehicleIds).put(color, vehicleId));
++		}
++	}
++
++	private static void collectSignalBlock(long color, ObjectOpenHashSet<Rail> visitedRails, Rail rail, ObjectArrayList<Rail> rails) {
++		if (visitedRails.add(rail) && rail.signalColors.contains(color)) {
++			rails.add(rail);
++			rail.connectedRails1.forEach(connectedRail -> collectSignalBlock(color, visitedRails, connectedRail, rails));
++			rail.connectedRails2.forEach(connectedRail -> collectSignalBlock(color, visitedRails, connectedRail, rails));
++		}
++	}
++
+ 	private static void reserveRail(long vehicleId, long color, ObjectOpenHashSet<Rail> visitedRails, Rail rail, boolean currentlyBlocked) {
+ 		if (!visitedRails.contains(rail) && rail.signalColors.contains(color)) {
+ 			(currentlyBlocked ? rail.currentlyBlockedVehicleIds : rail.preBlockedVehicleIds).put(color, vehicleId);
+@@ -311,7 +365,12 @@ public final class Rail extends RailSchema {
+ 	}
+ 
+ 	private static boolean isNotBlocked(Long2LongAVLTreeMap blockedVehicleIds, long vehicleId) {
+-		return blockedVehicleIds.values().longStream().allMatch(blockedVehicleId -> blockedVehicleId == vehicleId);
++		for (final long blockedVehicleId : blockedVehicleIds.values()) {
++			if (blockedVehicleId != vehicleId) {
++				return false;
++			}
++		}
++		return true;
+ 	}
+ 
+ 	public enum Shape {QUADRATIC, TWO_RADII, CABLE}
+diff --git a/src/main/java/org/mtr/core/data/RailMath.java b/src/main/java/org/mtr/core/data/RailMath.java
+index e692b3545ff99c949bb66ec1edc363c0c37b6700..1563466ace4233c0596bb989b39cb61eaf6c15da 100644
+--- a/src/main/java/org/mtr/core/data/RailMath.java
++++ b/src/main/java/org/mtr/core/data/RailMath.java
+@@ -2,6 +2,7 @@ package org.mtr.core.data;
+ 
+ import it.unimi.dsi.fastutil.doubles.DoubleDoubleImmutablePair;
+ import org.mtr.core.tool.Angle;
++import org.mtr.core.tool.Utilities;
+ import org.mtr.core.tool.Vector;
+ 
+ public class RailMath {
+@@ -234,7 +235,7 @@ public class RailMath {
+ 	public Vector getPosition(double rawValue, boolean reverse) {
+ 		final double count1 = Math.abs(tEnd1 - tStart1);
+ 		final double count2 = Math.abs(tEnd2 - tStart2);
+-		final double clampedValue = Math.clamp(rawValue, 0, count1 + count2);
++		final double clampedValue = Utilities.clamp(rawValue, 0, count1 + count2);
+ 		final double value = reverse ? count1 + count2 - clampedValue : clampedValue;
+ 		final double y = getPositionY(value);
+ 
+diff --git a/src/main/java/org/mtr/core/data/SavedRailBase.java b/src/main/java/org/mtr/core/data/SavedRailBase.java
+index 9140599ba2d25c525f718f9f3ae6b05f197b2e1a..983cdd4c4fcf39b1f2d9e0d614b79289c2a24ac2 100644
+--- a/src/main/java/org/mtr/core/data/SavedRailBase.java
++++ b/src/main/java/org/mtr/core/data/SavedRailBase.java
+@@ -28,8 +28,23 @@ public abstract class SavedRailBase<T extends SavedRailBase<T, U>, U extends Are
+ 	}
+ 
+ 	public Position getMidPosition() {
+-		final Position offsetPosition = position1.offset(position2);
+-		return new Position(offsetPosition.getX() / 2, offsetPosition.getY() / 2, offsetPosition.getZ() / 2);
++		return new Position((position1.getX() + position2.getX()) / 2, (position1.getY() + position2.getY()) / 2, (position1.getZ() + position2.getZ()) / 2);
++	}
++
++	public long getMinX() {
++		return Math.min(position1.getX(), position2.getX());
++	}
++
++	public long getMaxX() {
++		return Math.max(position1.getX(), position2.getX());
++	}
++
++	public long getMinZ() {
++		return Math.min(position1.getZ(), position2.getZ());
++	}
++
++	public long getMaxZ() {
++		return Math.max(position1.getZ(), position2.getZ());
+ 	}
+ 
+ 	public boolean isInvalidSavedRail(Data data) {
+diff --git a/src/main/java/org/mtr/core/data/Siding.java b/src/main/java/org/mtr/core/data/Siding.java
+index 1d7b168362fbc022b661811ee77d4986119a3eb7..ad2c0e69562c8138e62b40fce663a987b72a7f81 100644
+--- a/src/main/java/org/mtr/core/data/Siding.java
++++ b/src/main/java/org/mtr/core/data/Siding.java
+@@ -6,6 +6,7 @@ import it.unimi.dsi.fastutil.longs.Long2LongAVLTreeMap;
+ import it.unimi.dsi.fastutil.longs.Long2ObjectAVLTreeMap;
+ import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.longs.LongArrayList;
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.objects.*;
+ import org.mtr.core.Main;
+ import org.mtr.core.directions.DirectionsFinder;
+@@ -22,7 +23,7 @@ import org.mtr.legacy.data.DataFixer;
+ 
+ import javax.annotation.Nullable;
+ import java.util.Collections;
+-import java.util.Random;
++import java.util.concurrent.ThreadLocalRandom;
+ import java.util.function.BiConsumer;
+ import java.util.function.LongConsumer;
+ 
+@@ -37,6 +38,8 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	private final ObjectArrayList<PathData> pathSidingToMainRoute = new ObjectArrayList<>();
+ 	private final ObjectArrayList<PathData> pathMainRouteToSiding = new ObjectArrayList<>();
+ 	private final ObjectArraySet<Vehicle> vehicles = new ObjectArraySet<>();
++	private final ObjectArraySet<Vehicle> trainsToRemove = new ObjectArraySet<>();
++	private final LongOpenHashSet visitedDepartureIndices = new LongOpenHashSet();
+ 	private final ObjectImmutableList<ReaderBase> vehicleReaders;
+ 	/**
+ 	 * Trips this siding will serve
+@@ -59,6 +62,8 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	 * Mapping of departure indices to real time vehicle times
+ 	 */
+ 	private final Long2LongAVLTreeMap vehicleTimesAlongRoute = new Long2LongAVLTreeMap();
++	private String obaVehicleIdPrefix;
++	private final ObjectArrayList<String> obaVehicleIdsSnapshot = new ObjectArrayList<>();
+ 
+ 	public static final double ACCELERATION_DEFAULT = 1D / 250000;
+ 	public static final double MAX_ACCELERATION = 1D / 50000;
+@@ -85,6 +90,8 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	@Override
+ 	public void updateData(ReaderBase readerBase) {
+ 		super.updateData(readerBase);
++		obaVehicleIdPrefix = null;
++		obaVehicleIdsSnapshot.clear();
+ 		vehicles.removeIf(vehicle -> !vehicle.getIsOnRoute());
+ 	}
+ 
+@@ -164,6 +171,8 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 	public void setVehicleCars(ObjectArrayList<VehicleCar> newVehicleCars) {
+ 		vehicleCars.clear();
++		obaVehicleIdPrefix = null;
++		obaVehicleIdsSnapshot.clear();
+ 		double tempVehicleLength = 0;
+ 		for (int i = 0; i < newVehicleCars.size(); i++) {
+ 			final VehicleCar vehicleCar = newVehicleCars.get(i);
+@@ -191,11 +200,11 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	}
+ 
+ 	public void setDelayedVehicleSpeedIncreasePercentage(int delayedVehicleSpeedIncreasePercentage) {
+-		this.delayedVehicleSpeedIncreasePercentage = Math.clamp(delayedVehicleSpeedIncreasePercentage, 0, 100);
++		this.delayedVehicleSpeedIncreasePercentage = Utilities.clamp(delayedVehicleSpeedIncreasePercentage, 0, 100);
+ 	}
+ 
+ 	public void setDelayedVehicleReduceDwellTimePercentage(int delayedVehicleReduceDwellTimePercentage) {
+-		this.delayedVehicleReduceDwellTimePercentage = Math.clamp(delayedVehicleReduceDwellTimePercentage, 0, 100);
++		this.delayedVehicleReduceDwellTimePercentage = Utilities.clamp(delayedVehicleReduceDwellTimePercentage, 0, 100);
+ 	}
+ 
+ 	public void setEarlyVehicleIncreaseDwellTime(boolean earlyVehicleIncreaseDwellTime) {
+@@ -243,7 +252,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 		SidingPathFinder.findPathTick(pathMainRouteToSiding, sidingPathFinderMainRouteToSiding, area == null ? 0 : area.getCruisingAltitude(), () -> {
+ 			if (area != null) {
+ 				if (SidingPathFinder.overlappingPaths(area.getPath(), pathMainRouteToSiding)) {
+-					pathMainRouteToSiding.removeFirst();
++					pathMainRouteToSiding.remove(0);
+ 				}
+ 			}
+ 			finishGeneratingPath(false);
+@@ -270,6 +279,8 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 	public void simulateTrain(long millisElapsed, @Nullable ObjectArrayList<Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>>> vehiclePositions) {
+ 		vehicleTimesAlongRoute.clear();
++		trainsToRemove.clear();
++		visitedDepartureIndices.clear();
+ 
+ 		if (area == null) {
+ 			vehicles.clear();
+@@ -282,8 +293,6 @@ public final class Siding extends SidingSchema implements Utilities {
+ 		int trainsAtDepot = 0;
+ 		boolean spawnTrain = true;
+ 
+-		final ObjectArraySet<Vehicle> trainsToRemove = new ObjectArraySet<>();
+-		final LongArrayList visitedDepartureIndices = new LongArrayList();
+ 		for (final Vehicle vehicle : vehicles) {
+ 			vehicle.simulate(millisElapsed, vehiclePositions, vehicleTimesAlongRoute);
+ 
+@@ -334,6 +343,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 		if (!trainsToRemove.isEmpty()) {
+ 			trainsToRemove.forEach(vehicles::remove);
++			trainsToRemove.clear();
+ 		}
+ 	}
+ 
+@@ -390,6 +400,9 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	}
+ 
+ 	public void getArrivals(long currentMillis, Platform platform, long count, ObjectArrayList<ArrivalResponse> arrivalResponseList) {
++		if (count <= 0) {
++			return;
++		}
+ 		final long[] maxArrivalAndCount = {0, 0};
+ 		final ObjectArrayList<ArrivalResponse> tempArrivalResponseList = new ObjectArrayList<>();
+ 
+@@ -397,7 +410,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 			if (scheduledArrivalTime + deviation < maxArrivalAndCount[0] || maxArrivalAndCount[1] < count) {
+ 				final ArrivalResponse arrivalResponse = new ArrivalResponse(stopTime.customDestination, scheduledArrivalTime + deviation, scheduledDepartureTime + deviation, deviation, predicted, departureIndex, stopTime.tripStopIndex, trip.route, platform);
+ 				arrivalResponse.setCarDetails(getVehicleCars());
+-				tempArrivalResponseList.add(arrivalResponse);
++				addArrivalInStableOrder(tempArrivalResponseList, arrivalResponse, count);
+ 				maxArrivalAndCount[0] = Math.max(maxArrivalAndCount[0], scheduledArrivalTime + deviation);
+ 				maxArrivalAndCount[1]++;
+ 			}
+@@ -436,7 +449,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 	}
+ 
+ 	public void getOBAArrivalsAndDeparturesElementsWithTripsUsed(SingleElement<StopWithArrivalsAndDepartures> singleElement, StopWithArrivalsAndDepartures stopWithArrivalsAndDepartures, long currentMillis, Platform platform, int millsBefore, int millisAfter) {
+-		final ObjectAVLTreeSet<String> addedTripIds = new ObjectAVLTreeSet<>();
++		final ObjectOpenHashSet<String> addedTripIds = new ObjectOpenHashSet<>();
+ 		iterateArrivals(currentMillis, platform.getId(), millsBefore, millisAfter, (trip, tripStopIndex, stopTime, scheduledArrivalTime, scheduledDepartureTime, predicted, deviation, departureIndex, departureOffset) -> {
+ 			final String tripId = trip.getTripId(departureIndex, departureOffset);
+ 			stopWithArrivalsAndDepartures.add(ArrivalAndDeparture.create(
+@@ -680,20 +693,45 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 	private OccupancyStatus getOBAOccupancyStatus(boolean predicted) {
+ 		// TODO
+-		return predicted ? OccupancyStatus.values()[new Random().nextInt(OccupancyStatus.values().length - 2)] : OccupancyStatus.NO_DATA_AVAILABLE;
++		return predicted ? OccupancyStatus.values()[ThreadLocalRandom.current().nextInt(OccupancyStatus.values().length - 2)] : OccupancyStatus.NO_DATA_AVAILABLE;
+ 	}
+ 
+ 	private String getOBAVehicleId(int departureIndex) {
+-		final ObjectArrayList<String> vehicleIds = new ObjectArrayList<>();
+-		vehicleCars.forEach(vehicleCar -> {
+-			final String vehicleId = vehicleCar.getVehicleId();
+-			final int index = vehicleId.lastIndexOf("_");
+-			final String trimmedVehicleId = index < 0 ? vehicleId : vehicleId.substring(0, index);
+-			if (!vehicleIds.contains(trimmedVehicleId)) {
+-				vehicleIds.add(trimmedVehicleId);
++		boolean cacheMatches = obaVehicleIdPrefix != null && obaVehicleIdsSnapshot.size() == vehicleCars.size();
++		for (int i = 0; cacheMatches && i < vehicleCars.size(); i++) {
++			cacheMatches = obaVehicleIdsSnapshot.get(i).equals(vehicleCars.get(i).getVehicleId());
++		}
++		if (!cacheMatches) {
++			final ObjectLinkedOpenHashSet<String> vehicleIds = new ObjectLinkedOpenHashSet<>();
++			obaVehicleIdsSnapshot.clear();
++			vehicleCars.forEach(vehicleCar -> {
++				final String vehicleId = vehicleCar.getVehicleId();
++				obaVehicleIdsSnapshot.add(vehicleId);
++				final int index = vehicleId.lastIndexOf("_");
++				vehicleIds.add(index < 0 ? vehicleId : vehicleId.substring(0, index));
++			});
++			obaVehicleIdPrefix = String.join("_", vehicleIds);
++		}
++		return obaVehicleIdPrefix.isEmpty() ? "" : obaVehicleIdPrefix + "_" + departureIndex;
++	}
++
++	private static void addArrivalInStableOrder(ObjectArrayList<ArrivalResponse> arrivals, ArrivalResponse arrival, long count) {
++		int low = 0;
++		int high = arrivals.size();
++		while (low < high) {
++			final int middle = low + (high - low) / 2;
++			if (arrivals.get(middle).compareTo(arrival) <= 0) {
++				low = middle + 1;
++			} else {
++				high = middle;
+ 			}
+-		});
+-		return vehicleIds.isEmpty() ? "" : String.format("%s_%s", String.join("_", vehicleIds), departureIndex);
++		}
++		if (arrivals.size() < count) {
++			arrivals.add(low, arrival);
++		} else if (low < arrivals.size()) {
++			arrivals.add(low, arrival);
++			arrivals.remove(arrivals.size() - 1);
++		}
+ 	}
+ 
+ 	/**
+@@ -715,18 +753,18 @@ public final class Siding extends SidingSchema implements Utilities {
+ 			final double totalVehicleLength = getTotalVehicleLength(vehicleCars);
+ 
+ 			if (SidingPathFinder.overlappingPaths(pathSidingToMainRoute, pathMainRoute)) {
+-				final PathData pathData = pathMainRoute.removeFirst();
++				final PathData pathData = pathMainRoute.remove(0);
+ 				if (area.getRepeatInfinitely() && !overlappingFromRepeating) {
+ 					pathMainRoute.add(pathData);
+ 				}
+ 			} else {
+ 				if (area.getRepeatInfinitely() && overlappingFromRepeating) {
+-					pathSidingToMainRoute.add(pathMainRoute.removeFirst());
++					pathSidingToMainRoute.add(pathMainRoute.remove(0));
+ 				}
+ 			}
+ 
+ 			if (SidingPathFinder.overlappingPaths(pathMainRoute, pathMainRouteToSiding)) {
+-				pathMainRouteToSiding.removeFirst();
++				pathMainRouteToSiding.remove(0);
+ 			}
+ 
+ 			SidingPathFinder.generatePathDataDistances(pathSidingToMainRoute, 0);
+@@ -753,7 +791,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 				for (int j = 0; j < route.getRoutePlatforms().size(); j++) {
+ 					final long platformId = route.getRoutePlatforms().get(j).platform.getId();
+ 					if (j == 0 && !routePlatformInfoList.isEmpty() && Utilities.getElement(routePlatformInfoList, -1).platformId == platformId) {
+-						routePlatformInfoList.removeLast();
++						routePlatformInfoList.remove(routePlatformInfoList.size() - 1);
+ 					}
+ 					routePlatformInfoList.add(new RoutePlatformInfo(route, i, platformId, route.getDestination(j)));
+ 				}
+@@ -822,7 +860,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 					final long endTime = Math.round(time);
+ 
+ 					while (!routePlatformInfoList.isEmpty()) {
+-						final RoutePlatformInfo routePlatformInfo = routePlatformInfoList.getFirst();
++						final RoutePlatformInfo routePlatformInfo = routePlatformInfoList.get(0);
+ 
+ 						if (routePlatformInfo.platformId != pathData.getSavedRailBaseId()) {
+ 							break;
+@@ -848,7 +886,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 						writeRouteDuration = newStartTime -> routePlatformInfo.route.durations.add(newStartTime - endTime);
+ 						tripStopIndex++;
+-						routePlatformInfoList.removeFirst();
++						routePlatformInfoList.remove(0);
+ 					}
+ 				} else {
+ 					time += pathData.getDwellTime();
+@@ -883,7 +921,7 @@ public final class Siding extends SidingSchema implements Utilities {
+ 
+ 	public static double roundAcceleration(double acceleration) {
+ 		final double tempAcceleration = Utilities.round(acceleration, 8);
+-		return tempAcceleration <= 0 ? ACCELERATION_DEFAULT : Math.clamp(tempAcceleration, MIN_ACCELERATION, MAX_ACCELERATION);
++		return tempAcceleration <= 0 ? ACCELERATION_DEFAULT : Utilities.clamp(tempAcceleration, MIN_ACCELERATION, MAX_ACCELERATION);
+ 	}
+ 
+ 	/**
+diff --git a/src/main/java/org/mtr/core/data/Station.java b/src/main/java/org/mtr/core/data/Station.java
+index bcbf62c2b3d776eb496e5a1a24328c71abffd614..d25749d975a65e3511010c58c6ef9d9a068db092 100644
+--- a/src/main/java/org/mtr/core/data/Station.java
++++ b/src/main/java/org/mtr/core/data/Station.java
+@@ -96,7 +96,7 @@ public final class Station extends StationSchema {
+ 				colorToRouteMap.forEach((color, routes) -> {
+ 					Collections.sort(routes);
+ 					if (oneRouteFromEachColor != null) {
+-						oneRouteFromEachColor.add(routes.getFirst());
++						oneRouteFromEachColor.add(routes.get(0));
+ 					}
+ 				});
+ 				stationToColorToRoutesMap.put(stationMapper.apply(station), colorToRouteMap);
+diff --git a/src/main/java/org/mtr/core/data/Trip.java b/src/main/java/org/mtr/core/data/Trip.java
+index aacefc87b5be51daebfd33040bf093a339a21178..5673f5445939dce94bd7aaa61213c6204679e459 100644
+--- a/src/main/java/org/mtr/core/data/Trip.java
++++ b/src/main/java/org/mtr/core/data/Trip.java
+@@ -95,7 +95,7 @@ public class Trip implements Utilities {
+ 
+ 		singleElement.set(new TripDetails(
+ 				getTripId(departureIndex, departureOffset),
+-				siding.getOBATripStatus(currentMillis, stopTimes.getFirst(), departureIndex, departureOffset, "", ""),
++				siding.getOBATripStatus(currentMillis, stopTimes.get(0), departureIndex, departureOffset, "", ""),
+ 				schedule,
+ 				siding.getOBAFrequencyElement(currentMillis)
+ 		));
+diff --git a/src/main/java/org/mtr/core/data/Vehicle.java b/src/main/java/org/mtr/core/data/Vehicle.java
+index dbe8d97776f34867f6ddfc27a27420e9f06e72cc..ab462cda411a808df91495a28f0258f56083e879 100644
+--- a/src/main/java/org/mtr/core/data/Vehicle.java
++++ b/src/main/java/org/mtr/core/data/Vehicle.java
+@@ -3,7 +3,7 @@ package org.mtr.core.data;
+ import it.unimi.dsi.fastutil.booleans.BooleanBooleanImmutablePair;
+ import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
+ import it.unimi.dsi.fastutil.doubles.DoubleDoubleImmutablePair;
+-import it.unimi.dsi.fastutil.ints.IntAVLTreeSet;
++import it.unimi.dsi.fastutil.ints.IntOpenHashSet;
+ import it.unimi.dsi.fastutil.longs.Long2LongAVLTreeMap;
+ import it.unimi.dsi.fastutil.objects.Object2ObjectAVLTreeMap;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+@@ -34,6 +34,8 @@ public class Vehicle extends VehicleSchema implements Utilities {
+ 	private long manualCooldown;
+ 	private long doorCooldown;
+ 	private boolean atoOverride;
++	private final IntOpenHashSet signalColors = new IntOpenHashSet();
++	private final ObjectOpenHashSet<UUID> ridingClientsUpdated = new ObjectOpenHashSet<>();
+ 
+ 	public final VehicleExtraData vehicleExtraData;
+ 	private final Siding siding;
+@@ -532,15 +534,24 @@ public class Vehicle extends VehicleSchema implements Utilities {
+ 	 * </ul>
+ 	 */
+ 	private void writeVehiclePositions(int currentIndex, Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> vehiclePositions) {
+-		final Position[] minMaxPositions = {null, null};
++		long minX = Long.MAX_VALUE;
++		long minY = Long.MAX_VALUE;
++		long minZ = Long.MAX_VALUE;
++		long maxX = Long.MIN_VALUE;
++		long maxY = Long.MIN_VALUE;
++		long maxZ = Long.MIN_VALUE;
+ 		int index = currentIndex;
+ 
+ 		while (index >= 0) {
+ 			final PathData pathData = vehicleExtraData.immutablePath.get(index);
+ 			final Position position1 = pathData.getOrderedPosition1();
+ 			final Position position2 = pathData.getOrderedPosition2();
+-			minMaxPositions[0] = Position.getMin(minMaxPositions[0], Position.getMin(position1, position2));
+-			minMaxPositions[1] = Position.getMax(minMaxPositions[1], Position.getMax(position1, position2));
++			minX = Math.min(minX, Math.min(position1.getX(), position2.getX()));
++			minY = Math.min(minY, Math.min(position1.getY(), position2.getY()));
++			minZ = Math.min(minZ, Math.min(position1.getZ(), position2.getZ()));
++			maxX = Math.max(maxX, Math.max(position1.getX(), position2.getX()));
++			maxY = Math.max(maxY, Math.max(position1.getY(), position2.getY()));
++			maxZ = Math.max(maxZ, Math.max(position1.getZ(), position2.getZ()));
+ 
+ 			if (railProgress - vehicleExtraData.getTotalVehicleLength() > pathData.getEndDistance()) {
+ 				break;
+@@ -568,13 +579,36 @@ public class Vehicle extends VehicleSchema implements Utilities {
+ 				final boolean needsUpdate = vehicleExtraData.checkForUpdate();
+ 				// TODO for continuous movement, maybe only send the path once rather than sending the entire path for each vehicle
+ 				final int pathUpdateIndex = transportMode.continuousMovement ? 0 : Math.max(0, index + 1);
+-				((Simulator) data).clients.forEach(client -> {
+-					final Position position = client.getPosition();
+-					final double updateRadius = client.getUpdateRadius();
+-					if ((minMaxPositions[0] == null || minMaxPositions[1] == null) ? siding.area.inArea(position, updateRadius) : Utilities.isBetween(position, minMaxPositions[0], minMaxPositions[1], updateRadius) || !closeToDepot() && vehicleExtraData.hasRidingEntity(client.uuid)) {
+-						client.update(this, needsUpdate, pathUpdateIndex);
++				final Simulator simulator = (Simulator) data;
++				if (minX == Long.MAX_VALUE) {
++					simulator.forEachClientNear(
++							siding.area.getMinX(), siding.area.getMinY(), siding.area.getMinZ(), siding.area.getMaxX(), siding.area.getMaxY(), siding.area.getMaxZ(),
++							client -> {
++								if (siding.area.inArea(client.getPosition(), client.getUpdateRadius())) {
++									client.update(this, needsUpdate, pathUpdateIndex);
++								}
++							}
++					);
++				} else {
++					final long finalMinX = minX;
++					final long finalMinY = minY;
++					final long finalMinZ = minZ;
++					final long finalMaxX = maxX;
++					final long finalMaxY = maxY;
++					final long finalMaxZ = maxZ;
++					simulator.forEachClientNear(finalMinX, finalMinY, finalMinZ, finalMaxX, finalMaxY, finalMaxZ, client -> client.update(this, needsUpdate, pathUpdateIndex));
++					if (!closeToDepot()) {
++						ridingClientsUpdated.clear();
++						vehicleExtraData.iterateRidingEntities(vehicleRidingEntity -> {
++							if (ridingClientsUpdated.add(vehicleRidingEntity.uuid)) {
++								final Client client = simulator.getClient(vehicleRidingEntity.uuid);
++								if (client != null && !Utilities.isBetween(client.getPosition(), finalMinX, finalMinY, finalMinZ, finalMaxX, finalMaxY, finalMaxZ, client.getUpdateRadius())) {
++									client.update(this, needsUpdate, pathUpdateIndex);
++								}
++							}
++						});
+ 					}
+-				});
++				}
+ 			}
+ 
+ 			vehicleExtraData.setRoutePlatformInfo(siding.area, currentIndex);
+@@ -631,13 +665,14 @@ public class Vehicle extends VehicleSchema implements Utilities {
+ 		if (secondPass) {
+ 			return firstPathData.isSignalBlocked(id, Rail.BlockReservation.DO_NOT_RESERVE);
+ 		} else {
+-			final IntAVLTreeSet signalColors = firstPathData.getSignalColors();
++			signalColors.clear();
++			firstPathData.copySignalColors(signalColors);
+ 			int index = currentIndex + 1;
+ 
+ 			while (!signalColors.isEmpty() && index < vehicleExtraData.immutablePath.size()) {
+ 				final PathData pathData = vehicleExtraData.immutablePath.get(index);
+ 
+-				if (pathData.getSignalColors().intStream().noneMatch(signalColors::contains)) {
++				if (!pathData.hasSignalColor(signalColors)) {
+ 					// Only reserve the signal block after checking if the path after the signal block is clear, not before!
+ 					final double railBlockedDistance = railBlockedDistance(index, pathData.getStartDistance(), vehicleExtraData.getTotalVehicleLength(), vehiclePositions, false, true);
+ 					return railBlockedDistance >= 0 && railBlockedDistance < vehicleExtraData.getTotalVehicleLength() || firstPathData.isSignalBlocked(id, reserveRail ? Rail.BlockReservation.PRE_RESERVE : Rail.BlockReservation.DO_NOT_RESERVE);
+@@ -681,20 +716,20 @@ public class Vehicle extends VehicleSchema implements Utilities {
+ 
+ 	private ObjectObjectImmutablePair<Vector, Vector> getBogiePositions(double value, DoubleArrayList overrideY) {
+ 		final double lowerBound = railProgress - vehicleExtraData.getTotalVehicleLength();
+-		final double clampedValue = Math.clamp(value, lowerBound, railProgress);
++		final double clampedValue = Utilities.clamp(value, lowerBound, railProgress);
+ 		final double value1;
+ 		final double value2;
+-		final double clamp = Math.clamp(Math.min(Math.abs(clampedValue - lowerBound), Math.abs(clampedValue - railProgress)), 0.1, 1);
+-		value1 = Math.clamp(clampedValue + (reversed ? -clamp : clamp), lowerBound, railProgress - 0.001);
+-		value2 = Math.clamp(clampedValue - (reversed ? -clamp : clamp), lowerBound, railProgress - 0.001);
++		final double clamp = Utilities.clamp(Math.min(Math.abs(clampedValue - lowerBound), Math.abs(clampedValue - railProgress)), 0.1, 1);
++		value1 = Utilities.clamp(clampedValue + (reversed ? -clamp : clamp), lowerBound, railProgress - 0.001);
++		value2 = Utilities.clamp(clampedValue - (reversed ? -clamp : clamp), lowerBound, railProgress - 0.001);
+ 		final Vector position1 = getPosition(value1, overrideY);
+ 		final Vector position2 = getPosition(value2, overrideY);
+ 		return position1 == null || position2 == null ? new ObjectObjectImmutablePair<>(new Vector(value1, 0, 0), new Vector(value2, 0, 0)) : new ObjectObjectImmutablePair<>(position1, position2);
+ 	}
+ 
+ 	private static DoubleDoubleImmutablePair getBlockedBounds(PathData pathData, double lowerRailProgress, double upperRailProgress) {
+-		final double distanceFromStart = Math.clamp(lowerRailProgress, pathData.getStartDistance(), pathData.getEndDistance()) - pathData.getStartDistance();
+-		final double distanceToEnd = pathData.getEndDistance() - Math.clamp(upperRailProgress, pathData.getStartDistance(), pathData.getEndDistance());
++		final double distanceFromStart = Utilities.clamp(lowerRailProgress, pathData.getStartDistance(), pathData.getEndDistance()) - pathData.getStartDistance();
++		final double distanceToEnd = pathData.getEndDistance() - Utilities.clamp(upperRailProgress, pathData.getStartDistance(), pathData.getEndDistance());
+ 		return new DoubleDoubleImmutablePair(pathData.reversePositions ? distanceToEnd : distanceFromStart, pathData.getEndDistance() - pathData.getStartDistance() - (pathData.reversePositions ? distanceFromStart : distanceToEnd));
+ 	}
+ }
+diff --git a/src/main/java/org/mtr/core/data/VehicleExtraData.java b/src/main/java/org/mtr/core/data/VehicleExtraData.java
+index e4676bf36ccff8160a8af44e046082b0c3fd6892..ceff15349e690a34443f2164be9d329d8518222f 100644
+--- a/src/main/java/org/mtr/core/data/VehicleExtraData.java
++++ b/src/main/java/org/mtr/core/data/VehicleExtraData.java
+@@ -47,12 +47,58 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
+ 	}
+ 
+ 	public VehicleExtraData copy(int pathUpdateIndex) {
+-		final VehicleExtraData newVehicleExtraData = new VehicleExtraData(new JsonReader(Utilities.getJsonObjectFromData(this)));
++		final VehicleExtraData newVehicleExtraData = new VehicleExtraData(
++				depotId, sidingId, railLength, totalVehicleLength, repeatIndex1, repeatIndex2, acceleration, deceleration,
++				isManualAllowed, maxManualSpeed, manualToAutomaticTime, totalDistance, defaultPosition,
++				copyVehicleCars(vehicleCars), copyPath(path)
++		);
++		newVehicleExtraData.previousRouteId = previousRouteId;
++		newVehicleExtraData.previousPlatformId = previousPlatformId;
++		newVehicleExtraData.previousStationId = previousStationId;
++		newVehicleExtraData.previousRouteColor = previousRouteColor;
++		newVehicleExtraData.previousRouteName = previousRouteName;
++		newVehicleExtraData.previousRouteNumber = previousRouteNumber;
++		newVehicleExtraData.previousRouteType = previousRouteType;
++		newVehicleExtraData.previousRouteCircularState = previousRouteCircularState;
++		newVehicleExtraData.previousStationName = previousStationName;
++		newVehicleExtraData.previousRouteDestination = previousRouteDestination;
++		newVehicleExtraData.thisRouteId = thisRouteId;
++		newVehicleExtraData.thisPlatformId = thisPlatformId;
++		newVehicleExtraData.thisStationId = thisStationId;
++		newVehicleExtraData.thisRouteColor = thisRouteColor;
++		newVehicleExtraData.thisRouteName = thisRouteName;
++		newVehicleExtraData.thisRouteNumber = thisRouteNumber;
++		newVehicleExtraData.thisRouteType = thisRouteType;
++		newVehicleExtraData.thisRouteCircularState = thisRouteCircularState;
++		newVehicleExtraData.thisStationName = thisStationName;
++		newVehicleExtraData.thisRouteDestination = thisRouteDestination;
++		newVehicleExtraData.nextRouteId = nextRouteId;
++		newVehicleExtraData.nextPlatformId = nextPlatformId;
++		newVehicleExtraData.nextStationId = nextStationId;
++		newVehicleExtraData.nextRouteColor = nextRouteColor;
++		newVehicleExtraData.nextRouteName = nextRouteName;
++		newVehicleExtraData.nextRouteNumber = nextRouteNumber;
++		newVehicleExtraData.nextRouteType = nextRouteType;
++		newVehicleExtraData.nextRouteCircularState = nextRouteCircularState;
++		newVehicleExtraData.nextStationName = nextStationName;
++		newVehicleExtraData.nextRouteDestination = nextRouteDestination;
++		newVehicleExtraData.isTerminating = isTerminating;
++		interchangeColorsForStationNameList.forEach(interchangeColorsForStationName -> newVehicleExtraData.interchangeColorsForStationNameList.add(interchangeColorsForStationName.copy()));
++		newVehicleExtraData.stoppingPoint = stoppingPoint;
++		newVehicleExtraData.powerLevel = powerLevel;
++		newVehicleExtraData.speedTarget = speedTarget;
++		newVehicleExtraData.doorTarget = doorTarget;
++		newVehicleExtraData.isCurrentlyManual = isCurrentlyManual;
++		ridingEntities.forEach(vehicleRidingEntity -> newVehicleExtraData.ridingEntities.add(new VehicleRidingEntity(
++				vehicleRidingEntity.uuid, vehicleRidingEntity.getRidingCar(), vehicleRidingEntity.getX(), vehicleRidingEntity.getY(), vehicleRidingEntity.getZ(),
++				vehicleRidingEntity.getIsOnGangway(), vehicleRidingEntity.isDriver(), vehicleRidingEntity.manualAccelerate(), vehicleRidingEntity.manualBrake(),
++				vehicleRidingEntity.manualToggleDoors(), vehicleRidingEntity.manualToggleAto(), vehicleRidingEntity.getDoorOverride()
++		)));
+ 		newVehicleExtraData.path.clear();
+ 
+ 		for (int i = pathUpdateIndex; i <= path.size(); i++) {
+ 			if (i == path.size() && !path.isEmpty()) {
+-				newVehicleExtraData.path.add(0, path.getFirst());
++				newVehicleExtraData.path.add(0, path.get(0));
+ 			} else {
+ 				final PathData pathData = path.get(i);
+ 				if (i == pathUpdateIndex || pathData.getStartDistance() <= stoppingPoint) {
+@@ -66,6 +112,21 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
+ 		return newVehicleExtraData;
+ 	}
+ 
++	private static ObjectArrayList<VehicleCar> copyVehicleCars(ObjectArrayList<VehicleCar> vehicleCars) {
++		final ObjectArrayList<VehicleCar> copiedVehicleCars = new ObjectArrayList<>(vehicleCars.size());
++		vehicleCars.forEach(vehicleCar -> copiedVehicleCars.add(new VehicleCar(
++				vehicleCar.getVehicleId(), vehicleCar.getLength(), vehicleCar.getWidth(), vehicleCar.getBogie1Position(), vehicleCar.getBogie2Position(),
++				vehicleCar.getCouplingPadding1(false), vehicleCar.getCouplingPadding2(false)
++		)));
++		return copiedVehicleCars;
++	}
++
++	private static ObjectArrayList<PathData> copyPath(ObjectArrayList<PathData> path) {
++		final ObjectArrayList<PathData> copiedPath = new ObjectArrayList<>(path.size());
++		path.forEach(pathData -> copiedPath.add(pathData.detachedCopy()));
++		return copiedPath;
++	}
++
+ 	public long getDepotId() {
+ 		return depotId;
+ 	}
+@@ -438,7 +499,12 @@ public class VehicleExtraData extends VehicleExtraDataSchema {
+ 	}
+ 
+ 	boolean hasRidingEntity(UUID uuid) {
+-		return ridingEntities.stream().anyMatch(vehicleRidingEntity -> vehicleRidingEntity.uuid.equals(uuid));
++		for (final VehicleRidingEntity vehicleRidingEntity : ridingEntities) {
++			if (vehicleRidingEntity.uuid.equals(uuid)) {
++				return true;
++			}
++		}
++		return false;
+ 	}
+ 
+ 	public static VehicleExtraData create(
+diff --git a/src/main/java/org/mtr/core/data/VehiclePosition.java b/src/main/java/org/mtr/core/data/VehiclePosition.java
+index 182c934a25df1d01d6f4bdd43010a51b766ae43d..7e036fac36b66d62cfb6cf360e7466b6ef28726a 100644
+--- a/src/main/java/org/mtr/core/data/VehiclePosition.java
++++ b/src/main/java/org/mtr/core/data/VehiclePosition.java
+@@ -1,26 +1,43 @@
+ package org.mtr.core.data;
+ 
+-import it.unimi.dsi.fastutil.objects.ObjectArrayList;
++import it.unimi.dsi.fastutil.doubles.DoubleArrayList;
++import it.unimi.dsi.fastutil.longs.LongArrayList;
+ import org.mtr.core.tool.Utilities;
+ 
+ public class VehiclePosition {
+ 
+-	private final ObjectArrayList<BlockedSegment> blockedSegments = new ObjectArrayList<>();
++	private final DoubleArrayList startDistances = new DoubleArrayList();
++	private final DoubleArrayList endDistances = new DoubleArrayList();
++	private final LongArrayList vehicleIds = new LongArrayList();
+ 
+ 	public void addSegment(double startDistance, double endDistance, long id) {
+-		blockedSegments.add(new BlockedSegment(startDistance, endDistance, id));
++		startDistances.add(startDistance);
++		endDistances.add(endDistance);
++		vehicleIds.add(id);
++	}
++
++	public void clear() {
++		startDistances.clear();
++		endDistances.clear();
++		vehicleIds.clear();
++	}
++
++	public boolean isEmpty() {
++		return vehicleIds.isEmpty();
+ 	}
+ 
+ 	public double getClosestOverlap(double startDistance, double endDistance, boolean reversePositions, long id) {
+ 		double closestOverlap = Double.MAX_VALUE;
+ 		boolean valueSet = false;
+ 
+-		for (final BlockedSegment blockedSegment : blockedSegments) {
+-			if (id != blockedSegment.id && Utilities.isIntersecting(startDistance, endDistance, blockedSegment.startDistance, blockedSegment.endDistance)) {
++		for (int i = 0; i < vehicleIds.size(); i++) {
++			final double blockedStartDistance = startDistances.getDouble(i);
++			final double blockedEndDistance = endDistances.getDouble(i);
++			if (id != vehicleIds.getLong(i) && Utilities.isIntersecting(startDistance, endDistance, blockedStartDistance, blockedEndDistance)) {
+ 				if (reversePositions) {
+-					closestOverlap = Math.min(closestOverlap, Math.max(0, endDistance - blockedSegment.endDistance));
++					closestOverlap = Math.min(closestOverlap, Math.max(0, endDistance - blockedEndDistance));
+ 				} else {
+-					closestOverlap = Math.min(closestOverlap, Math.max(0, blockedSegment.startDistance - startDistance));
++					closestOverlap = Math.min(closestOverlap, Math.max(0, blockedStartDistance - startDistance));
+ 				}
+ 				valueSet = true;
+ 			}
+@@ -28,17 +45,4 @@ public class VehiclePosition {
+ 
+ 		return valueSet ? closestOverlap : -1;
+ 	}
+-
+-	private static class BlockedSegment {
+-
+-		private final double startDistance;
+-		private final double endDistance;
+-		private final long id;
+-
+-		private BlockedSegment(double startDistance, double endDistance, long id) {
+-			this.startDistance = startDistance;
+-			this.endDistance = endDistance;
+-			this.id = id;
+-		}
+-	}
+ }
+diff --git a/src/main/java/org/mtr/core/directions/Connection.java b/src/main/java/org/mtr/core/directions/Connection.java
+index 3690ab91bca9d2c3fb3f04aa3809d85d8a9d55c4..0aa5ce2f4089659f37cb698fc13973485f685ace 100644
+--- a/src/main/java/org/mtr/core/directions/Connection.java
++++ b/src/main/java/org/mtr/core/directions/Connection.java
+@@ -14,5 +14,47 @@ import javax.annotation.Nullable;
+  * @param endTime         the absolute ending time (in millis after epoch) of the connection
+  * @param walkingDistance the walking distance if walking or 0 if riding
+  */
+-public record Connection(@Nullable Route route, long startPlatformId, long endPlatformId, long startTime, long endTime, long walkingDistance) {
++public class Connection {
++
++	@Nullable
++	private final Route route;
++	private final long startPlatformId;
++	private final long endPlatformId;
++	private final long startTime;
++	private final long endTime;
++	private final long walkingDistance;
++
++	public Connection(@Nullable Route route, long startPlatformId, long endPlatformId, long startTime, long endTime, long walkingDistance) {
++		this.route = route;
++		this.startPlatformId = startPlatformId;
++		this.endPlatformId = endPlatformId;
++		this.startTime = startTime;
++		this.endTime = endTime;
++		this.walkingDistance = walkingDistance;
++	}
++
++	@Nullable
++	public Route route() {
++		return route;
++	}
++
++	public long startPlatformId() {
++		return startPlatformId;
++	}
++
++	public long endPlatformId() {
++		return endPlatformId;
++	}
++
++	public long startTime() {
++		return startTime;
++	}
++
++	public long endTime() {
++		return endTime;
++	}
++
++	public long walkingDistance() {
++		return walkingDistance;
++	}
+ }
+diff --git a/src/main/java/org/mtr/core/directions/IndependentConnection.java b/src/main/java/org/mtr/core/directions/IndependentConnection.java
+index 14594bb8755ba8e53468407926cae99ccf0728fd..7170bde1ea3de537ac0ebc8920290675914b9017 100644
+--- a/src/main/java/org/mtr/core/directions/IndependentConnection.java
++++ b/src/main/java/org/mtr/core/directions/IndependentConnection.java
+@@ -13,5 +13,41 @@ import javax.annotation.Nullable;
+  * @param duration        the travel time
+  * @param walkingDistance the walking distance if walking or 0 if riding
+  */
+-public record IndependentConnection(@Nullable Route route, long startPlatformId, long endPlatformId, long duration, long walkingDistance) {
++public class IndependentConnection {
++
++	@Nullable
++	private final Route route;
++	private final long startPlatformId;
++	private final long endPlatformId;
++	private final long duration;
++	private final long walkingDistance;
++
++	public IndependentConnection(@Nullable Route route, long startPlatformId, long endPlatformId, long duration, long walkingDistance) {
++		this.route = route;
++		this.startPlatformId = startPlatformId;
++		this.endPlatformId = endPlatformId;
++		this.duration = duration;
++		this.walkingDistance = walkingDistance;
++	}
++
++	@Nullable
++	public Route route() {
++		return route;
++	}
++
++	public long startPlatformId() {
++		return startPlatformId;
++	}
++
++	public long endPlatformId() {
++		return endPlatformId;
++	}
++
++	public long duration() {
++		return duration;
++	}
++
++	public long walkingDistance() {
++		return walkingDistance;
++	}
+ }
+diff --git a/src/main/java/org/mtr/core/directions/Request.java b/src/main/java/org/mtr/core/directions/Request.java
+index 8a26a3cb02c526172bd39c3886f468aeebf21d53..ed3764758c8d0e276c5a09299831e3277d864a99 100644
+--- a/src/main/java/org/mtr/core/directions/Request.java
++++ b/src/main/java/org/mtr/core/directions/Request.java
+@@ -7,5 +7,45 @@ import org.mtr.core.map.DirectionsResponse;
+ 
+ import java.util.function.Consumer;
+ 
+-public record Request(Position startPosition, Position endPosition, long startTime, Long2ObjectOpenHashMap<Connection> earliestConnections, Long2LongOpenHashMap walkingDistancesToEnd, Consumer<DirectionsResponse> callback) {
++public class Request {
++
++	private final Position startPosition;
++	private final Position endPosition;
++	private final long startTime;
++	private final Long2ObjectOpenHashMap<Connection> earliestConnections;
++	private final Long2LongOpenHashMap walkingDistancesToEnd;
++	private final Consumer<DirectionsResponse> callback;
++
++	public Request(Position startPosition, Position endPosition, long startTime, Long2ObjectOpenHashMap<Connection> earliestConnections, Long2LongOpenHashMap walkingDistancesToEnd, Consumer<DirectionsResponse> callback) {
++		this.startPosition = startPosition;
++		this.endPosition = endPosition;
++		this.startTime = startTime;
++		this.earliestConnections = earliestConnections;
++		this.walkingDistancesToEnd = walkingDistancesToEnd;
++		this.callback = callback;
++	}
++
++	public Position startPosition() {
++		return startPosition;
++	}
++
++	public Position endPosition() {
++		return endPosition;
++	}
++
++	public long startTime() {
++		return startTime;
++	}
++
++	public Long2ObjectOpenHashMap<Connection> earliestConnections() {
++		return earliestConnections;
++	}
++
++	public Long2LongOpenHashMap walkingDistancesToEnd() {
++		return walkingDistancesToEnd;
++	}
++
++	public Consumer<DirectionsResponse> callback() {
++		return callback;
++	}
+ }
+diff --git a/src/main/java/org/mtr/core/operation/ArrivalsRequest.java b/src/main/java/org/mtr/core/operation/ArrivalsRequest.java
+index ea4ae94f94ad224e1e755e498727e5683a3d9bff..a6b1e7626a97362c346e4bd7f595fd9481235304 100644
+--- a/src/main/java/org/mtr/core/operation/ArrivalsRequest.java
++++ b/src/main/java/org/mtr/core/operation/ArrivalsRequest.java
+@@ -3,7 +3,8 @@ package org.mtr.core.operation;
+ import it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
+ import it.unimi.dsi.fastutil.longs.LongConsumer;
+ import it.unimi.dsi.fastutil.longs.LongImmutableList;
+-import it.unimi.dsi.fastutil.objects.ObjectAVLTreeSet;
++import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
+ import org.mtr.core.data.Platform;
+ import org.mtr.core.data.Station;
+@@ -27,7 +28,7 @@ public final class ArrivalsRequest extends ArrivalsRequestSchema {
+ 
+ 	public ArrivalsResponse getArrivals(Simulator simulator) {
+ 		final ObjectArrayList<ArrivalResponse> arrivalResponseList = new ObjectArrayList<>();
+-		final ObjectAVLTreeSet<String> visitedKeys = new ObjectAVLTreeSet<>();
++		final Long2ObjectOpenHashMap<LongOpenHashSet> visitedSidingIdsByPlatform = new Long2ObjectOpenHashMap<>();
+ 		final LongAVLTreeSet allPlatformIds = new LongAVLTreeSet();
+ 
+ 		allPlatformIds.addAll(platformIds);
+@@ -39,9 +40,7 @@ public final class ArrivalsRequest extends ArrivalsRequestSchema {
+ 			final Platform platform = simulator.platformIdMap.get(platformId);
+ 			if (platform != null) {
+ 				platform.routes.forEach(route -> route.depots.forEach(depot -> depot.savedRails.forEach(siding -> {
+-					final String key = String.format("%s_%s", platformId, siding.getId());
+-					if (!visitedKeys.contains(key)) {
+-						visitedKeys.add(key);
++					if (visitedSidingIdsByPlatform.computeIfAbsent(platformId, key -> new LongOpenHashSet()).add(siding.getId())) {
+ 						siding.getArrivals(simulator.getCurrentMillis(), platform, maxCountPerPlatform, arrivalResponseList);
+ 					}
+ 				})));
+diff --git a/src/main/java/org/mtr/core/operation/DataRequest.java b/src/main/java/org/mtr/core/operation/DataRequest.java
+index ada93921046f7b6d1055199117da9e916d3f32b5..a35a0322a72055e8658434f8b6c0e3fe809e3738 100644
+--- a/src/main/java/org/mtr/core/operation/DataRequest.java
++++ b/src/main/java/org/mtr/core/operation/DataRequest.java
+@@ -1,7 +1,8 @@
+ package org.mtr.core.operation;
+ 
+-import it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
++import it.unimi.dsi.fastutil.longs.LongOpenHashSet;
+ import it.unimi.dsi.fastutil.objects.ObjectArrayList;
++import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
+ import org.mtr.core.data.*;
+ import org.mtr.core.generated.operation.DataRequestSchema;
+ import org.mtr.core.serializer.ReaderBase;
+@@ -26,38 +27,43 @@ public final class DataRequest extends DataRequestSchema {
+ 
+ 	public DataResponse getData(Simulator simulator) {
+ 		final DataResponse dataResponse = new DataResponse(simulator);
+-		final LongAVLTreeSet addedStationIds = new LongAVLTreeSet();
+-		final LongAVLTreeSet addedPlatformIds = new LongAVLTreeSet();
+-		final LongAVLTreeSet addedRouteIds = new LongAVLTreeSet();
+-
+-		simulator.stations.forEach(station -> {
++		final LongOpenHashSet addedStationIds = new LongOpenHashSet();
++		final LongOpenHashSet addedPlatformIds = new LongOpenHashSet();
++		final LongOpenHashSet addedRouteIds = new LongOpenHashSet();
++		final LongOpenHashSet existingStationIdSet = new LongOpenHashSet(existingStationIds);
++		final LongOpenHashSet existingPlatformIdSet = new LongOpenHashSet(existingPlatformIds);
++		final LongOpenHashSet existingSidingIdSet = new LongOpenHashSet(existingSidingIds);
++		final LongOpenHashSet existingRouteIdSet = new LongOpenHashSet(existingSimplifiedRouteIds);
++		final LongOpenHashSet existingDepotIdSet = new LongOpenHashSet(existingDepotIds);
++		final ObjectOpenHashSet<String> existingRailIdSet = new ObjectOpenHashSet<>(existingRailIds);
++
++		simulator.iterateStationsNear(clientPosition, requestRadius, station -> {
+ 			if (station.inArea(clientPosition, requestRadius)) {
+ 				final ObjectArrayList<Station> stationsToAdd = new ObjectArrayList<>();
+ 				stationsToAdd.add(station);
+ 				stationsToAdd.addAll(station.connectedStations);
+ 				stationsToAdd.forEach(addStation -> {
+-					if (!addedStationIds.contains(addStation.getId())) {
+-						if (existingStationIds.contains(addStation.getId())) {
++					if (addedStationIds.add(addStation.getId())) {
++						if (existingStationIdSet.contains(addStation.getId())) {
+ 							dataResponse.addStation(addStation.getId());
+ 						} else {
+ 							dataResponse.addStation(addStation);
+ 						}
+-						addedStationIds.add(addStation.getId());
+-						addStation.savedRails.forEach(platform -> addPlatform(platform, dataResponse, addedPlatformIds, addedRouteIds));
++						addStation.savedRails.forEach(platform -> addPlatform(platform, dataResponse, addedPlatformIds, addedRouteIds, existingPlatformIdSet, existingRouteIdSet));
+ 					}
+ 				});
+ 			}
+ 		});
+ 
+-		simulator.platforms.forEach(platform -> {
++		simulator.iteratePlatformsNear(clientPosition, requestRadius, platform -> {
+ 			if (platform.closeTo(clientPosition, requestRadius)) {
+-				addPlatform(platform, dataResponse, addedPlatformIds, addedRouteIds);
++				addPlatform(platform, dataResponse, addedPlatformIds, addedRouteIds, existingPlatformIdSet, existingRouteIdSet);
+ 			}
+ 		});
+ 
+-		simulator.sidings.forEach(siding -> {
++		simulator.iterateSidingsNear(clientPosition, requestRadius, siding -> {
+ 			if (siding.closeTo(clientPosition, requestRadius)) {
+-				if (existingSidingIds.contains(siding.getId())) {
++				if (existingSidingIdSet.contains(siding.getId())) {
+ 					dataResponse.addSiding(siding.getId());
+ 				} else {
+ 					dataResponse.addSiding(siding);
+@@ -65,9 +71,9 @@ public final class DataRequest extends DataRequestSchema {
+ 			}
+ 		});
+ 
+-		simulator.depots.forEach(depot -> {
++		simulator.iterateDepotsNear(clientPosition, requestRadius, depot -> {
+ 			if (depot.inArea(clientPosition, requestRadius)) {
+-				if (existingDepotIds.contains(depot.getId())) {
++				if (existingDepotIdSet.contains(depot.getId())) {
+ 					dataResponse.addDepot(depot.getId());
+ 				} else {
+ 					dataResponse.addDepot(depot);
+@@ -75,9 +81,10 @@ public final class DataRequest extends DataRequestSchema {
+ 			}
+ 		});
+ 
+-		simulator.railIdMap.forEach((railId, rail) -> {
++		simulator.iterateRailsNear(clientPosition, requestRadius, rail -> {
+ 			if (rail.closeTo(clientPosition, requestRadius)) {
+-				if (existingRailIds.contains(railId)) {
++				final String railId = rail.getHexId();
++				if (existingRailIdSet.contains(railId)) {
+ 					dataResponse.addRail(rail.getHexId());
+ 				} else {
+ 					dataResponse.addRail(rail);
+@@ -112,22 +119,20 @@ public final class DataRequest extends DataRequestSchema {
+ 		existingRailIds.addAll(clientData.railIdMap.keySet());
+ 	}
+ 
+-	private void addPlatform(Platform platform, DataResponse dataResponse, LongAVLTreeSet addedPlatformIds, LongAVLTreeSet addedRouteIds) {
+-		if (!addedPlatformIds.contains(platform.getId())) {
++	private static void addPlatform(Platform platform, DataResponse dataResponse, LongOpenHashSet addedPlatformIds, LongOpenHashSet addedRouteIds, LongOpenHashSet existingPlatformIds, LongOpenHashSet existingRouteIds) {
++		if (addedPlatformIds.add(platform.getId())) {
+ 			if (existingPlatformIds.contains(platform.getId())) {
+ 				dataResponse.addPlatform(platform.getId());
+ 			} else {
+ 				dataResponse.addPlatform(platform);
+ 			}
+-			addedPlatformIds.add(platform.getId());
+ 			platform.routes.forEach(route -> {
+-				if (!route.getHidden() && !addedRouteIds.contains(route.getId())) {
+-					if (existingSimplifiedRouteIds.contains(route.getId())) {
++				if (!route.getHidden() && addedRouteIds.add(route.getId())) {
++					if (existingRouteIds.contains(route.getId())) {
+ 						dataResponse.addRoute(route.getId());
+ 					} else {
+ 						dataResponse.addRoute(route);
+ 					}
+-					addedRouteIds.add(route.getId());
+ 				}
+ 			});
+ 		}
+diff --git a/src/main/java/org/mtr/core/operation/GenerateByLift.java b/src/main/java/org/mtr/core/operation/GenerateByLift.java
+index 125d9fe883c39bc2244dc7bb4484732f3dfce545..e8eb21d0df30f900367e775629999062b3c1b8b8 100644
+--- a/src/main/java/org/mtr/core/operation/GenerateByLift.java
++++ b/src/main/java/org/mtr/core/operation/GenerateByLift.java
+@@ -18,8 +18,8 @@ public final class GenerateByLift {
+ 	public void generate() {
+ 		final ObjectArrayList<Lift> liftsToModify = UpdateDataRequest.getAndRemoveMatchingLifts(data, lift);
+ 		liftsToModify.add(lift);
+-		liftsToModify.getFirst().setFloors(lift);
+-		data.lifts.add(liftsToModify.getFirst());
++		liftsToModify.get(0).setFloors(lift);
++		data.lifts.add(liftsToModify.get(0));
+ 		data.sync();
+ 	}
+ }
+diff --git a/src/main/java/org/mtr/core/path/PathFinder.java b/src/main/java/org/mtr/core/path/PathFinder.java
+index b7d9b0a6df4a49cfd2514acaae0ea28b0c7dae29..1d776350b02f704a263bade1476df865689317c6 100644
+--- a/src/main/java/org/mtr/core/path/PathFinder.java
++++ b/src/main/java/org/mtr/core/path/PathFinder.java
+@@ -10,6 +10,7 @@ import javax.annotation.Nullable;
+ public abstract class PathFinder<T> {
+ 
+ 	private long totalTime = Long.MAX_VALUE;
++	private long tempElapsedTime = 1;
+ 	private boolean completed;
+ 	private int iterations;
+ 
+@@ -29,7 +30,7 @@ public abstract class PathFinder<T> {
+ 
+ 	protected ObjectArrayList<ConnectionDetails<T>> findPath() {
+ 		if (!completed) {
+-			final long elapsedTime = tempData.stream().mapToLong(data -> data.duration + data.waitingTime).sum();
++			final long elapsedTime = tempElapsedTime;
+ 			final ConnectionDetails<T> prevConnectionDetails = Utilities.getElement(tempData, -1);
+ 			final T prevNode = prevConnectionDetails == null ? startNode : prevConnectionDetails.node;
+ 
+@@ -63,12 +64,14 @@ public abstract class PathFinder<T> {
+ 					completed = true;
+ 					Main.LOGGER.debug("Found the best path after {} iteration(s)", iterations);
+ 				} else {
+-					tempData.removeLast();
++					final ConnectionDetails<T> removedConnectionDetails = tempData.remove(tempData.size() - 1);
++					tempElapsedTime -= removedConnectionDetails.duration + removedConnectionDetails.waitingTime;
+ 				}
+ 			} else {
+ 				final long totalDuration = elapsedTime + bestDuration + bestWaitingTime;
+ 				localBlacklist.put(bestNode, totalDuration);
+ 				tempData.add(new ConnectionDetails<>(bestNode, bestDuration, bestWaitingTime, bestRouteId));
++				tempElapsedTime += bestDuration + bestWaitingTime;
+ 
+ 				if (bestNode.equals(endNode)) {
+ 					if (totalDuration > 0 && (totalDuration < totalTime || totalDuration == totalTime && tempData.size() < data.size())) {
+@@ -82,6 +85,7 @@ public abstract class PathFinder<T> {
+ 					}
+ 
+ 					tempData.clear();
++					tempElapsedTime = 0;
+ 					localBlacklist.clear();
+ 				}
+ 			}
+diff --git a/src/main/java/org/mtr/core/path/SidingPathFinder.java b/src/main/java/org/mtr/core/path/SidingPathFinder.java
+index 32cad84143a838385b3380ed07e850b63de10636..05f6b9419682dc78ec6a1926b56b925ba66e36e5 100644
+--- a/src/main/java/org/mtr/core/path/SidingPathFinder.java
++++ b/src/main/java/org/mtr/core/path/SidingPathFinder.java
+@@ -122,7 +122,7 @@ public final class SidingPathFinder<T extends AreaBase<T, U>, U extends SavedRai
+ 	public static <T extends AreaBase<T, U>, U extends SavedRailBase<U, T>, V extends AreaBase<V, W>, W extends SavedRailBase<W, V>> void findPathTick(ObjectArrayList<PathData> path, ObjectArrayList<SidingPathFinder<T, U, V, W>> sidingPathFinders, long cruisingAltitude, Runnable callbackSuccess, BiConsumer<U, W> callbackFail) {
+ 		if (!sidingPathFinders.isEmpty()) {
+ 			Utilities.loopUntilTimeout(() -> {
+-				final SidingPathFinder<T, U, V, W> sidingPathFinder = sidingPathFinders.getFirst();
++				final SidingPathFinder<T, U, V, W> sidingPathFinder = sidingPathFinders.get(0);
+ 				final ObjectArrayList<PathData> tempPath = sidingPathFinder.tick(cruisingAltitude);
+ 
+ 				if (tempPath != null) {
+@@ -133,10 +133,10 @@ public final class SidingPathFinder<T extends AreaBase<T, U>, U extends SavedRai
+ 						return 0;
+ 					} else {
+ 						if (overlappingPaths(path, tempPath)) {
+-							tempPath.removeFirst();
++							tempPath.remove(0);
+ 						}
+ 						path.addAll(tempPath);
+-						sidingPathFinders.removeFirst();
++						sidingPathFinders.remove(0);
+ 						if (sidingPathFinders.isEmpty()) {
+ 							callbackSuccess.run();
+ 							return 0;
+@@ -165,7 +165,7 @@ public final class SidingPathFinder<T extends AreaBase<T, U>, U extends SavedRai
+ 		if (path.isEmpty() || newPath.isEmpty()) {
+ 			return false;
+ 		} else {
+-			return Utilities.getElement(path, -1).isSameRail(newPath.getFirst());
++			return Utilities.getElement(path, -1).isSameRail(newPath.get(0));
+ 		}
+ 	}
+ 
+diff --git a/src/main/java/org/mtr/core/servlet/MessageQueue.java b/src/main/java/org/mtr/core/servlet/MessageQueue.java
+index 62e549a07018e7f571bd4660249d4415ac2ba42d..35c5db523e04434112e78f870127797c9ce32252 100644
+--- a/src/main/java/org/mtr/core/servlet/MessageQueue.java
++++ b/src/main/java/org/mtr/core/servlet/MessageQueue.java
+@@ -2,24 +2,24 @@ package org.mtr.core.servlet;
+ 
+ import org.mtr.core.Main;
+ 
+-import java.util.concurrent.LinkedBlockingDeque;
++import java.util.concurrent.ConcurrentLinkedQueue;
+ import java.util.function.Consumer;
+ 
+ public final class MessageQueue<T> {
+ 
+-	private final LinkedBlockingDeque<T> linkedBlockingDeque = new LinkedBlockingDeque<>();
++	private final ConcurrentLinkedQueue<T> queue = new ConcurrentLinkedQueue<>();
+ 
+ 	public void put(T object) {
+-		try {
+-			linkedBlockingDeque.put(object);
+-		} catch (InterruptedException e) {
+-			Main.LOGGER.error("", e);
++		if (Thread.interrupted()) {
++			Main.LOGGER.error("", new InterruptedException());
++		} else {
++			queue.add(object);
+ 		}
+ 	}
+ 
+ 	public void process(Consumer<T> callback) {
+ 		while (true) {
+-			final T object = linkedBlockingDeque.poll();
++			final T object = queue.poll();
+ 			if (object == null) {
+ 				break;
+ 			} else {
+diff --git a/src/main/java/org/mtr/core/servlet/SystemMapServlet.java b/src/main/java/org/mtr/core/servlet/SystemMapServlet.java
+index 0ebc939bacc2a8fcbc43e39e83d07b6f78d3587f..b4171e3cbc81e7ee1a2e9c67b548d262816e6d44 100644
+--- a/src/main/java/org/mtr/core/servlet/SystemMapServlet.java
++++ b/src/main/java/org/mtr/core/servlet/SystemMapServlet.java
+@@ -31,13 +31,24 @@ public final class SystemMapServlet extends ServletBase {
+ 		if (endpoint.equals("directions")) {
+ 			simulator.directionsFinder.addRequest(new DirectionsRequest(jsonReader, directionsResponse -> sendResponse.accept(Utilities.getJsonObjectFromData(directionsResponse))));
+ 		} else {
+-			sendResponse.accept(switch (endpoint) {
+-				case "stations-and-routes" -> stationsAndRoutesResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getStationsAndRoutes, 30000)).get(simulator);
+-				case "departures" -> departuresResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getDepartures, 3000)).get(simulator);
+-				case "arrivals" -> Utilities.getJsonObjectFromData(new ArrivalsRequest(jsonReader).getArrivals(simulator));
+-				case "clients" -> clientsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getClients, 3000)).get(simulator);
+-				default -> new JsonObject();
+-			});
++			final JsonObject response;
++			switch (endpoint) {
++				case "stations-and-routes":
++					response = stationsAndRoutesResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getStationsAndRoutes, 30000)).get(simulator);
++					break;
++				case "departures":
++					response = departuresResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getDepartures, 3000)).get(simulator);
++					break;
++				case "arrivals":
++					response = Utilities.getJsonObjectFromData(new ArrivalsRequest(jsonReader).getArrivals(simulator));
++					break;
++				case "clients":
++					response = clientsResponses.computeIfAbsent(simulator.dimension, key -> new CachedResponse(SystemMapServlet::getClients, 3000)).get(simulator);
++					break;
++				default:
++					response = new JsonObject();
++			}
++			sendResponse.accept(response);
+ 		}
+ 	}
+ 
+diff --git a/src/main/java/org/mtr/core/simulation/FileLoader.java b/src/main/java/org/mtr/core/simulation/FileLoader.java
+index cfcecbbe071cd36a7be86868e4682463d397bfc7..6f3a5c4300d629a7de072166cb0793da49d79fb0 100644
+--- a/src/main/java/org/mtr/core/simulation/FileLoader.java
++++ b/src/main/java/org/mtr/core/simulation/FileLoader.java
+@@ -27,7 +27,7 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 	private final ObjectSet<T> dataSet;
+ 	private final Path path;
+ 	private final boolean threadedFileLoading;
+-	private final Object2IntAVLTreeMap<String> fileHashes = new Object2IntAVLTreeMap<>();
++	private final Object2IntOpenHashMap<String> fileHashes = new Object2IntOpenHashMap<>();
+ 
+ 	public FileLoader(ObjectSet<T> dataSet, Function<MessagePackReader, T> getData, Path rootPath, String key, boolean threadedFileLoading) {
+ 		this.key = key;
+@@ -45,13 +45,13 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 
+ 	public IntIntImmutablePair save(boolean useReducedHash) {
+ 		final ObjectArrayList<T> dirtyData = new ObjectArrayList<>(dataSet);
+-		final ObjectImmutableList<ObjectArrayList<String>> checkFilesToDelete = createEmptyList256();
++		final ObjectImmutableList<ObjectLinkedOpenHashSet<String>> checkFilesToDelete = createEmptyList256();
+ 		fileHashes.keySet().forEach(fileName -> checkFilesToDelete.get(getParentInt(fileName)).add(fileName));
+ 
+ 		final int filesWritten = writeDirtyDataToFile(checkFilesToDelete, dirtyData, SerializedDataBaseWithId::getHexId, useReducedHash);
+ 		int filesDeleted = 0;
+ 
+-		for (final ObjectArrayList<String> checkFilesToDeleteForParent : checkFilesToDelete) {
++		for (final ObjectLinkedOpenHashSet<String> checkFilesToDeleteForParent : checkFilesToDelete) {
+ 			for (final String fileName : checkFilesToDeleteForParent) {
+ 				try {
+ 					if (Files.deleteIfExists(path.resolve(fileName))) {
+@@ -69,42 +69,51 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 
+ 	private void readMessagePackFromFile(Function<MessagePackReader, T> getData) {
+ 		final Object2ObjectArrayMap<String, Future<T>> futureDataMap = new Object2ObjectArrayMap<>();
+-		final ExecutorService executorService = Executors.newCachedThreadPool();
+-
+-		try (final Stream<Path> pathStream = Files.list(path)) {
+-			pathStream.forEach(idFolder -> {
+-				try (final Stream<Path> folderStream = Files.list(idFolder)) {
+-					folderStream.forEach(idFile -> {
+-						final String fileName = combineAsPath(idFolder, idFile);
+-						if (threadedFileLoading) {
+-							futureDataMap.put(fileName, executorService.submit(() -> readFile(getData, idFile)));
+-						} else {
+-							processFile(fileName, readFile(getData, idFile));
+-						}
+-					});
+-				} catch (Exception e) {
+-					Main.LOGGER.error("", e);
+-				}
++		final ExecutorService executorService = threadedFileLoading ? Executors.newFixedThreadPool(Math.max(1, Math.min(8, Runtime.getRuntime().availableProcessors()))) : null;
+ 
++		try {
++			try (final Stream<Path> pathStream = Files.list(path)) {
++				pathStream.forEach(idFolder -> {
++					try (final Stream<Path> folderStream = Files.list(idFolder)) {
++						folderStream.forEach(idFile -> {
++							final String fileName = combineAsPath(idFolder, idFile);
++							if (executorService != null) {
++								futureDataMap.put(fileName, executorService.submit(() -> readFile(getData, idFile)));
++							} else {
++								processFile(fileName, readFile(getData, idFile));
++							}
++						});
++					} catch (Exception e) {
++						Main.LOGGER.error("", e);
++					}
++
++					try {
++						Files.deleteIfExists(idFolder);
++						Main.LOGGER.debug("Deleted empty folder: {}", idFolder);
++					} catch (DirectoryNotEmptyException ignored) {
++					} catch (Exception e) {
++						Main.LOGGER.error("", e);
++					}
++				});
++			} catch (Exception e) {
++				Main.LOGGER.error("", e);
++			}
++
++			if (executorService != null) {
++				executorService.shutdown();
++			}
++			futureDataMap.forEach((fileName, futureData) -> {
+ 				try {
+-					Files.deleteIfExists(idFolder);
+-					Main.LOGGER.debug("Deleted empty folder: {}", idFolder);
+-				} catch (DirectoryNotEmptyException ignored) {
++					processFile(fileName, futureData.get());
+ 				} catch (Exception e) {
+ 					Main.LOGGER.error("", e);
+ 				}
+ 			});
+-		} catch (Exception e) {
+-			Main.LOGGER.error("", e);
+-		}
+-
+-		futureDataMap.forEach((fileName, futureData) -> {
+-			try {
+-				processFile(fileName, futureData.get());
+-			} catch (Exception e) {
+-				Main.LOGGER.error("", e);
++		} finally {
++			if (executorService != null) {
++				executorService.shutdownNow();
+ 			}
+-		});
++		}
+ 	}
+ 
+ 	private void processFile(String fileName, @Nullable T data) {
+@@ -122,31 +131,31 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 		}
+ 	}
+ 
+-	private int writeDirtyDataToFile(ObjectImmutableList<ObjectArrayList<String>> checkFilesToDelete, ObjectArrayList<T> dirtyData, Function<T, String> getFileName, boolean useReducedHash) {
++	private int writeDirtyDataToFile(ObjectImmutableList<ObjectLinkedOpenHashSet<String>> checkFilesToDelete, ObjectArrayList<T> dirtyData, Function<T, String> getFileName, boolean useReducedHash) {
+ 		int filesWritten = 0;
+-		while (!dirtyData.isEmpty()) {
+-			final T data = dirtyData.removeFirst();
+-
++		for (final T data : dirtyData) {
+ 			if (data != null && data.isValid()) {
+ 				final String fileName = getFileName.apply(data);
+ 				final String parentFolderName = getParent(fileName);
+ 				final String parentAndFileName = combineAsPath(parentFolderName, fileName);
+-				final int hash = getHash(data, useReducedHash);
++				checkFilesToDelete.get(getParentInt(fileName)).remove(parentAndFileName);
++				final byte[] packedData = getPackedData(data, useReducedHash);
++				if (packedData == null) {
++					continue;
++				}
++				final int hash = Arrays.hashCode(packedData);
+ 
+ 				if (!fileHashes.containsKey(parentAndFileName) || hash != fileHashes.getInt(parentAndFileName)) {
+ 					createDirectory(path.resolve(parentFolderName));
+ 
+-					try (final MessagePacker messagePacker = MessagePack.newDefaultPacker(Files.newOutputStream(path.resolve(parentAndFileName), StandardOpenOption.CREATE))) {
+-						packMessage(messagePacker, data, useReducedHash);
++					try {
++						Files.write(path.resolve(parentAndFileName), packedData, StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING);
++						fileHashes.put(parentAndFileName, hash);
++						filesWritten++;
+ 					} catch (Exception e) {
+ 						Main.LOGGER.error("", e);
+ 					}
+-
+-					fileHashes.put(parentAndFileName, hash);
+-					filesWritten++;
+ 				}
+-
+-				checkFilesToDelete.get(getParentInt(fileName)).remove(parentAndFileName);
+ 			}
+ 		}
+ 
+@@ -184,10 +193,10 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 		}
+ 	}
+ 
+-	private static ObjectImmutableList<ObjectArrayList<String>> createEmptyList256() {
+-		final ObjectArrayList<ObjectArrayList<String>> list = new ObjectArrayList<>();
++	private static ObjectImmutableList<ObjectLinkedOpenHashSet<String>> createEmptyList256() {
++		final ObjectArrayList<ObjectLinkedOpenHashSet<String>> list = new ObjectArrayList<>();
+ 		for (int i = 0; i <= 0xFF; i++) {
+-			list.add(new ObjectArrayList<>());
++			list.add(new ObjectLinkedOpenHashSet<>());
+ 		}
+ 		return new ObjectImmutableList<>(list);
+ 	}
+@@ -197,18 +206,23 @@ public class FileLoader<T extends SerializedDataBaseWithId> {
+ 	}
+ 
+ 	private static String combineAsPath(String parentFolderName, String fileName) {
+-		return String.format("%s/%s", parentFolderName, fileName);
++		return parentFolderName + "/" + fileName;
+ 	}
+ 
+ 	private static int getHash(SerializedDataBaseWithId data, boolean useReducedHash) {
+-		int hash = 0;
++		final byte[] packedData = getPackedData(data, useReducedHash);
++		return packedData == null ? 0 : Arrays.hashCode(packedData);
++	}
++
++	@Nullable
++	private static byte[] getPackedData(SerializedDataBaseWithId data, boolean useReducedHash) {
+ 		try (final MessageBufferPacker messageBufferPacker = MessagePack.newDefaultBufferPacker()) {
+ 			packMessage(messageBufferPacker, data, useReducedHash);
+-			hash = Arrays.hashCode(messageBufferPacker.toByteArray());
++			return messageBufferPacker.toByteArray();
+ 		} catch (Exception e) {
+ 			Main.LOGGER.error("", e);
++			return null;
+ 		}
+-		return hash;
+ 	}
+ 
+ 	private static void packMessage(MessagePacker messagePacker, SerializedDataBaseWithId data, boolean useReducedHash) {
+diff --git a/src/main/java/org/mtr/core/simulation/Simulator.java b/src/main/java/org/mtr/core/simulation/Simulator.java
+index df10ec53b12fd6ba83ecf2f7d0473fbfea2a48aa..513d269b9ff509206cdf1a6ab3d4df088724636c 100644
+--- a/src/main/java/org/mtr/core/simulation/Simulator.java
++++ b/src/main/java/org/mtr/core/simulation/Simulator.java
+@@ -1,6 +1,7 @@
+ package org.mtr.core.simulation;
+ 
+ import it.unimi.dsi.fastutil.ints.IntIntImmutablePair;
++import it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
+ import it.unimi.dsi.fastutil.objects.*;
+ import org.mtr.core.Main;
+ import org.mtr.core.data.*;
+@@ -46,8 +47,14 @@ public class Simulator extends Data implements Utilities {
+ 	private final Object2LongOpenHashMap<UUID> ridingVehicleIds = new Object2LongOpenHashMap<>();
+ 	private final MessageQueue<QueueObject> messageQueueC2S = new MessageQueue<>();
+ 	private final MessageQueue<QueueObject> messageQueueS2C = new MessageQueue<>();
++	private final Long2ObjectOpenHashMap<ObjectArrayList<Client>> clientsByCell = new Long2ObjectOpenHashMap<>();
++	private final Object2ObjectOpenHashMap<UUID, Client> clientsById = new Object2ObjectOpenHashMap<>();
++	private final ObjectArrayList<ObjectArrayList<Client>> clientCellListPool = new ObjectArrayList<>();
++	private double maximumClientUpdateRadius;
+ 
+ 	private static final int SIMULATION_DIFFERENCE_LOGGING_THRESHOLD = 120000;
++	private static final int CLIENT_CELL_SIZE = 256;
++	private static final long MAX_CLIENT_CELLS_PER_QUERY = 4096;
+ 
+ 	public Simulator(String dimension, String[] dimensions, Path rootPath, boolean threadedFileLoading) {
+ 		this.dimension = dimension;
+@@ -223,6 +230,46 @@ public class Simulator extends Data implements Utilities {
+ 		ridingVehicleIds.removeLong(uuid);
+ 	}
+ 
++	@Nullable
++	public Client getClient(UUID uuid) {
++		if (clients.size() <= 8) {
++			for (final Client client : clients) {
++				if (client.uuid.equals(uuid)) {
++					return client;
++				}
++			}
++			return null;
++		}
++		return clientsById.get(uuid);
++	}
++
++	public void forEachClientNear(long minX, long minY, long minZ, long maxX, long maxY, long maxZ, Consumer<Client> consumer) {
++		if (clients.size() <= 8) {
++			clients.forEach(client -> acceptClientIfNear(client, minX, minY, minZ, maxX, maxY, maxZ, consumer));
++			return;
++		}
++
++		final long minCellX = Math.floorDiv((long) Math.floor(minX - maximumClientUpdateRadius), CLIENT_CELL_SIZE);
++		final long minCellZ = Math.floorDiv((long) Math.floor(minZ - maximumClientUpdateRadius), CLIENT_CELL_SIZE);
++		final long maxCellX = Math.floorDiv((long) Math.ceil(maxX + maximumClientUpdateRadius), CLIENT_CELL_SIZE);
++		final long maxCellZ = Math.floorDiv((long) Math.ceil(maxZ + maximumClientUpdateRadius), CLIENT_CELL_SIZE);
++		final long width = maxCellX - minCellX + 1;
++		final long depth = maxCellZ - minCellZ + 1;
++		if (width <= 0 || depth <= 0 || width > MAX_CLIENT_CELLS_PER_QUERY || depth > MAX_CLIENT_CELLS_PER_QUERY || width * depth > MAX_CLIENT_CELLS_PER_QUERY) {
++			clients.forEach(client -> acceptClientIfNear(client, minX, minY, minZ, maxX, maxY, maxZ, consumer));
++			return;
++		}
++
++		for (long cellX = minCellX; cellX <= maxCellX; cellX++) {
++			for (long cellZ = minCellZ; cellZ <= maxCellZ; cellZ++) {
++				final ObjectArrayList<Client> clientsInCell = clientsByCell.get(getClientCellKey(cellX, cellZ));
++				if (clientsInCell != null) {
++					clientsInCell.forEach(client -> acceptClientIfNear(client, minX, minY, minZ, maxX, maxY, maxZ, consumer));
++				}
++			}
++		}
++	}
++
+ 	@Nullable
+ 	public Platform getNextPlatformOfRidingVehicle(UUID uuid) {
+ 		final Platform[] platform = {null};
+@@ -266,11 +313,23 @@ public class Simulator extends Data implements Utilities {
+ 		setCurrentMillis(lastMillis + millisElapsed);
+ 
+ 		try {
++			rebuildClientSpatialIndex();
+ 			vehiclePositions.forEach(vehiclePositionsForTransportMode -> {
+ 				if (!vehiclePositionsForTransportMode.isEmpty()) {
+-					vehiclePositionsForTransportMode.removeFirst();
++					final Object2ObjectAVLTreeMap<Position, Object2ObjectAVLTreeMap<Position, VehiclePosition>> reusableVehiclePositions = vehiclePositionsForTransportMode.remove(0);
++					reusableVehiclePositions.entrySet().removeIf(entry -> {
++						final Object2ObjectAVLTreeMap<Position, VehiclePosition> vehiclePositionsByEndPosition = entry.getValue();
++						vehiclePositionsByEndPosition.entrySet().removeIf(innerEntry -> innerEntry.getValue().isEmpty());
++						if (vehiclePositionsByEndPosition.isEmpty()) {
++							return true;
++						}
++						vehiclePositionsByEndPosition.values().forEach(VehiclePosition::clear);
++						return false;
++					});
++					vehiclePositionsForTransportMode.add(reusableVehiclePositions);
++				} else {
++					vehiclePositionsForTransportMode.add(new Object2ObjectAVLTreeMap<>());
+ 				}
+-				vehiclePositionsForTransportMode.add(new Object2ObjectAVLTreeMap<>());
+ 			});
+ 
+ 			rails.forEach(rail -> rail.tick1(this));
+@@ -306,6 +365,47 @@ public class Simulator extends Data implements Utilities {
+ 		}
+ 	}
+ 
++	private void rebuildClientSpatialIndex() {
++		clientsByCell.values().forEach(clientsInCell -> {
++			clientsInCell.clear();
++			clientCellListPool.add(clientsInCell);
++		});
++		clientsByCell.clear();
++		clientsById.clear();
++		maximumClientUpdateRadius = 0;
++		if (clients.size() <= 8) {
++			clientCellListPool.clear();
++			return;
++		}
++		clients.forEach(client -> {
++			final Position position = client.getPosition();
++			final long cellX = Math.floorDiv(position.getX(), CLIENT_CELL_SIZE);
++			final long cellZ = Math.floorDiv(position.getZ(), CLIENT_CELL_SIZE);
++			final long cellKey = getClientCellKey(cellX, cellZ);
++			ObjectArrayList<Client> clientsInCell = clientsByCell.get(cellKey);
++			if (clientsInCell == null) {
++				clientsInCell = clientCellListPool.isEmpty() ? new ObjectArrayList<>() : clientCellListPool.remove(clientCellListPool.size() - 1);
++				clientsByCell.put(cellKey, clientsInCell);
++			}
++			clientsInCell.add(client);
++			clientsById.put(client.uuid, client);
++			maximumClientUpdateRadius = Math.max(maximumClientUpdateRadius, client.getUpdateRadius());
++		});
++		while (clientCellListPool.size() > clients.size()) {
++			clientCellListPool.remove(clientCellListPool.size() - 1);
++		}
++	}
++
++	private static void acceptClientIfNear(Client client, long minX, long minY, long minZ, long maxX, long maxY, long maxZ, Consumer<Client> consumer) {
++		if (Utilities.isBetween(client.getPosition(), minX, minY, minZ, maxX, maxY, maxZ, client.getUpdateRadius())) {
++			consumer.accept(client);
++		}
++	}
++
++	private static long getClientCellKey(long cellX, long cellZ) {
++		return cellX << 32 ^ cellZ & 0xFFFFFFFFL;
++	}
++
+ 	private void save(boolean useReducedHash) {
+ 		// Save all data
+ 		final ObjectLongImmutablePair<Boolean> changedAndDuration = Utilities.measureDuration(() -> {
+@@ -344,6 +444,24 @@ public class Simulator extends Data implements Utilities {
+ 		return changedCount > 0 || deletedCount > 0;
+ 	}
+ 
+-	private record FileLoaderHolder(FileLoader<Station> fileLoaderStations, FileLoader<Platform> fileLoaderPlatforms, FileLoader<Siding> fileLoaderSidings, FileLoader<Route> fileLoaderRoutes, FileLoader<Depot> fileLoaderDepots, FileLoader<Lift> fileLoaderLifts, FileLoader<Rail> fileLoaderRails) {
++	private static class FileLoaderHolder {
++
++		private final FileLoader<Station> fileLoaderStations;
++		private final FileLoader<Platform> fileLoaderPlatforms;
++		private final FileLoader<Siding> fileLoaderSidings;
++		private final FileLoader<Route> fileLoaderRoutes;
++		private final FileLoader<Depot> fileLoaderDepots;
++		private final FileLoader<Lift> fileLoaderLifts;
++		private final FileLoader<Rail> fileLoaderRails;
++
++		private FileLoaderHolder(FileLoader<Station> fileLoaderStations, FileLoader<Platform> fileLoaderPlatforms, FileLoader<Siding> fileLoaderSidings, FileLoader<Route> fileLoaderRoutes, FileLoader<Depot> fileLoaderDepots, FileLoader<Lift> fileLoaderLifts, FileLoader<Rail> fileLoaderRails) {
++			this.fileLoaderStations = fileLoaderStations;
++			this.fileLoaderPlatforms = fileLoaderPlatforms;
++			this.fileLoaderSidings = fileLoaderSidings;
++			this.fileLoaderRoutes = fileLoaderRoutes;
++			this.fileLoaderDepots = fileLoaderDepots;
++			this.fileLoaderLifts = fileLoaderLifts;
++			this.fileLoaderRails = fileLoaderRails;
++		}
+ 	}
+ }
+diff --git a/src/main/java/org/mtr/core/tool/LatLon.java b/src/main/java/org/mtr/core/tool/LatLon.java
+index f1eed01cbcef497f8d8e1a1b37a12739dc87b5d3..59684a44d215c1676f4f9e160aa0bca51a92cee3 100644
+--- a/src/main/java/org/mtr/core/tool/LatLon.java
++++ b/src/main/java/org/mtr/core/tool/LatLon.java
+@@ -2,12 +2,20 @@ package org.mtr.core.tool;
+ 
+ import org.mtr.core.data.Position;
+ 
+-public record LatLon(double lat, double lon) {
++public class LatLon {
++
++	public final double lat;
++	public final double lon;
+ 
+ 	public static final double MAX_LAT = 90;
+ 	public static final double MAX_LON = 180;
+ 	private static final int EARTH_CIRCUMFERENCE_METERS = 40075017;
+ 
++	public LatLon(double lat, double lon) {
++		this.lat = lat;
++		this.lon = lon;
++	}
++
+ 	public LatLon(Position position) {
+ 		this(metersToLat(-position.getZ()), metersToLon(position.getX()));
+ 	}
+@@ -16,11 +24,19 @@ public record LatLon(double lat, double lon) {
+ 		return new LatLon(lat + latOffset, lon + lonOffset);
+ 	}
+ 
++	public double lat() {
++		return lat;
++	}
++
++	public double lon() {
++		return lon;
++	}
++
+ 	public static double metersToLat(double meters) {
+-		return Math.clamp(MAX_LAT * 2 * meters / EARTH_CIRCUMFERENCE_METERS, -MAX_LAT, MAX_LAT);
++		return Utilities.clamp(MAX_LAT * 2 * meters / EARTH_CIRCUMFERENCE_METERS, -MAX_LAT, MAX_LAT);
+ 	}
+ 
+ 	public static double metersToLon(double meters) {
+-		return Math.clamp(MAX_LON * 2 * meters / EARTH_CIRCUMFERENCE_METERS, -MAX_LON, MAX_LON);
++		return Utilities.clamp(MAX_LON * 2 * meters / EARTH_CIRCUMFERENCE_METERS, -MAX_LON, MAX_LON);
+ 	}
+ }
+diff --git a/src/main/java/org/mtr/core/tool/Utilities.java b/src/main/java/org/mtr/core/tool/Utilities.java
+index 640d8e27edc8d305c512e4bb7f3b75635b9fec65..d50af76b4276a7eb6c5089d8a881ed5214cb232a 100644
+--- a/src/main/java/org/mtr/core/tool/Utilities.java
++++ b/src/main/java/org/mtr/core/tool/Utilities.java
+@@ -53,6 +53,22 @@ public interface Utilities {
+ 		return isBetween(value3, value1, value2) || isBetween(value4, value1, value2) || isBetween(value1, value3, value4) || isBetween(value2, value3, value4);
+ 	}
+ 
++	static int clamp(int value, int min, int max) {
++		return Math.min(max, Math.max(min, value));
++	}
++
++	static long clamp(long value, long min, long max) {
++		return Math.min(max, Math.max(min, value));
++	}
++
++	static float clamp(float value, float min, float max) {
++		return Math.min(max, Math.max(min, value));
++	}
++
++	static double clamp(double value, double min, double max) {
++		return Math.min(max, Math.max(min, value));
++	}
++
+ 	static double round(double value, int decimalPlaces) {
+ 		int factor = 1;
+ 		for (int i = 0; i < decimalPlaces; i++) {
+@@ -154,7 +170,7 @@ public interface Utilities {
+ 					return lowIndex < 0 ? -1 : lowIndex;
+ 				}
+ 
+-				index = Math.clamp((lowIndex + highIndex) / 2, 0, listSize - 1);
++				index = Utilities.clamp((lowIndex + highIndex) / 2, 0, listSize - 1);
+ 			}
+ 		}
+ 	}
+diff --git a/src/main/java/org/mtr/core/tool/Vector.java b/src/main/java/org/mtr/core/tool/Vector.java
+index 3256304169329d2835bc28165198c098058e39b7..b6ec7a9a9dc41c7424dba57f89dcbf2a6a5f6d9f 100644
+--- a/src/main/java/org/mtr/core/tool/Vector.java
++++ b/src/main/java/org/mtr/core/tool/Vector.java
+@@ -1,6 +1,28 @@
+ package org.mtr.core.tool;
+ 
+-public record Vector(double x, double y, double z) {
++public class Vector {
++
++	public final double x;
++	public final double y;
++	public final double z;
++
++	public Vector(double x, double y, double z) {
++		this.x = x;
++		this.y = y;
++		this.z = z;
++	}
++
++	public double x() {
++		return x;
++	}
++
++	public double y() {
++		return y;
++	}
++
++	public double z() {
++		return z;
++	}
+ 
+ 	public Vector add(double x, double y, double z) {
+ 		return new Vector(this.x + x, this.y + y, this.z + z);
+diff --git a/src/main/java/org/mtr/legacy/data/RailNodeConnection.java b/src/main/java/org/mtr/legacy/data/RailNodeConnection.java
+index 18e209195846dea23cd447a6e98bc4cdd27a00c3..374a5076d31037a15e1aaaf658bf5df259f9d147 100644
+--- a/src/main/java/org/mtr/legacy/data/RailNodeConnection.java
++++ b/src/main/java/org/mtr/legacy/data/RailNodeConnection.java
+@@ -5,6 +5,7 @@ import org.mtr.core.data.TransportMode;
+ import org.mtr.core.serializer.ReaderBase;
+ import org.mtr.core.tool.Angle;
+ import org.mtr.core.tool.EnumHelper;
++import org.mtr.core.tool.Utilities;
+ import org.mtr.core.tool.Vector;
+ import org.mtr.legacy.generated.data.RailNodeConnectionSchema;
+ 
+@@ -60,7 +61,7 @@ public final class RailNodeConnection extends RailNodeConnectionSchema {
+ 	private Vector getPosition(double rawValue, boolean reverse) {
+ 		final double count1 = Math.abs(t_end_1 - t_start_1);
+ 		final double count2 = Math.abs(t_end_2 - t_start_2);
+-		final double clampedValue = Math.clamp(rawValue, 0, count1 + count2);
++		final double clampedValue = Utilities.clamp(rawValue, 0, count1 + count2);
+ 		final double value = reverse ? count1 + count2 - clampedValue : clampedValue;
+ 
+ 		if (value <= count1) {
+diff --git a/src/test/java/org/mtr/core/data/VehicleExtraDataCopyPerformanceTest.java b/src/test/java/org/mtr/core/data/VehicleExtraDataCopyPerformanceTest.java
+new file mode 100644
+index 0000000000000000000000000000000000000000..942230c43af70b79754feb7ee453dc69e86ea8dc
+--- /dev/null
++++ b/src/test/java/org/mtr/core/data/VehicleExtraDataCopyPerformanceTest.java
+@@ -0,0 +1,105 @@
++package org.mtr.core.data;
++
++import it.unimi.dsi.fastutil.objects.ObjectArrayList;
++import it.unimi.dsi.fastutil.objects.ObjectOpenHashSet;
++import org.junit.jupiter.api.Test;
++import org.mtr.core.generated.data.VehicleExtraDataSchema;
++import org.mtr.core.serializer.JsonReader;
++import org.mtr.core.tool.Angle;
++import org.mtr.core.tool.Utilities;
++
++import java.lang.reflect.Field;
++import java.lang.reflect.Modifier;
++import java.util.UUID;
++
++import static org.junit.jupiter.api.Assertions.assertEquals;
++import static org.junit.jupiter.api.Assertions.assertNull;
++
++public final class VehicleExtraDataCopyPerformanceTest {
++
++	@Test
++	public void explicitCopyMatchesLegacySerializationRoundTrip() throws ReflectiveOperationException {
++		final Position startPosition = new Position(0, 64, 0);
++		final Position endPosition = new Position(32, 64, 0);
++		final Rail rail = Rail.newRail(
++				startPosition, Angle.values()[0], endPosition, Angle.values()[0], Rail.Shape.QUADRATIC, 0,
++				new ObjectArrayList<>(), 80, 0, false, false, true, false, false, TransportMode.TRAIN
++		);
++		final PathData pathData = new PathData(rail, 3, 4000, 0, startPosition, endPosition);
++		final ObjectArrayList<VehicleCar> vehicleCars = ObjectArrayList.of(new VehicleCar("test_train_1", 20, 3, 4, 16, 0.5, 0.75));
++		final VehicleExtraData source = VehicleExtraData.create(
++				1, 2, 40, vehicleCars, new ObjectArrayList<>(), new ObjectArrayList<>(), new ObjectArrayList<>(), pathData,
++				false, 0.000001, 0.000002, true, 0.001, 5000
++		);
++
++		populateMutableSchemaFields(source);
++		final InterchangeRouteNamesForColor routeNames = new InterchangeRouteNamesForColor(0x123456);
++		routeNames.addRouteName("Local");
++		routeNames.addRouteName("Express");
++		final InterchangeColorsForStationName interchange = new InterchangeColorsForStationName("Central");
++		interchange.addColor(routeNames);
++		getListField("interchangeColorsForStationNameList", source).add(interchange);
++		final ObjectOpenHashSet<VehicleRidingEntity> ridingEntities = new ObjectOpenHashSet<>();
++		ridingEntities.add(new VehicleRidingEntity(UUID.fromString("12345678-1234-5678-1234-567812345678"), 0, 1.25, 2.5, 3.75, true, true, true, false, true, false, true));
++		source.addRidingEntities(ridingEntities);
++
++		final VehicleExtraData legacyCopy = new VehicleExtraData(new JsonReader(Utilities.getJsonObjectFromData(source)));
++		final ObjectArrayList<PathData> legacyPath = getListField("path", legacyCopy);
++		legacyPath.clear();
++		for (int i = 0; i <= source.immutablePath.size(); i++) {
++			if (i == source.immutablePath.size() && !source.immutablePath.isEmpty()) {
++				legacyPath.add(0, source.immutablePath.get(0));
++			} else {
++				final PathData currentPathData = source.immutablePath.get(i);
++				if (i == 0 || currentPathData.getStartDistance() <= source.getStoppingPoint()) {
++					legacyPath.add(currentPathData);
++				} else {
++					break;
++				}
++			}
++		}
++
++		final VehicleExtraData optimizedCopy = source.copy(0);
++		final Field railField = PathData.class.getDeclaredField("rail");
++		railField.setAccessible(true);
++		assertNull(railField.get(legacyCopy.immutablePath.get(0)));
++		assertNull(railField.get(optimizedCopy.immutablePath.get(0)));
++		assertEquals(
++				Utilities.prettyPrint(Utilities.getJsonObjectFromData(legacyCopy)),
++				Utilities.prettyPrint(Utilities.getJsonObjectFromData(optimizedCopy))
++		);
++	}
++
++	private static void populateMutableSchemaFields(VehicleExtraData data) throws IllegalAccessException {
++		long longValue = 100;
++		double doubleValue = 1.25;
++		boolean booleanValue = false;
++		int stringIndex = 0;
++		for (final Field field : VehicleExtraDataSchema.class.getDeclaredFields()) {
++			if (Modifier.isFinal(field.getModifiers())) {
++				continue;
++			}
++			field.setAccessible(true);
++			final Class<?> type = field.getType();
++			if (type == long.class) {
++				field.setLong(data, longValue++);
++			} else if (type == double.class) {
++				field.setDouble(data, doubleValue++);
++			} else if (type == boolean.class) {
++				field.setBoolean(data, booleanValue = !booleanValue);
++			} else if (type == String.class) {
++				field.set(data, "value-" + stringIndex++);
++			} else if (type.isEnum()) {
++				final Object[] values = type.getEnumConstants();
++				field.set(data, values[values.length - 1]);
++			}
++		}
++	}
++
++	@SuppressWarnings("unchecked")
++	private static <T> ObjectArrayList<T> getListField(String name, VehicleExtraData data) throws ReflectiveOperationException {
++		final Field field = VehicleExtraDataSchema.class.getDeclaredField(name);
++		field.setAccessible(true);
++		return (ObjectArrayList<T>) field.get(data);
++	}
++}

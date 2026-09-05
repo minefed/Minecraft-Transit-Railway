@@ -1,0 +1,2 @@
+# Preserve patch hashes and literal diff context, including blank context lines.
+*.patch -text -whitespace
