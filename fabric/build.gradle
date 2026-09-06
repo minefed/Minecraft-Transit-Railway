@@ -80,9 +80,9 @@ tasks.register("buildWebsite", Exec) {
 
 tasks.register("setupFiles") {
 	dependsOn("buildWebsite")
+	outputs.upToDateWhen { false }
 	doLast {
 	copy {
-		outputs.upToDateWhen { false }
 		from "src/main/KeysTemplate.java"
 		into "src/main/java/org/mtr/mod"
 		filter(ReplaceTokens, tokens: ["version": version + "+" + minecraftVersion, "server": testServer, "debug": debug])
@@ -90,7 +90,6 @@ tasks.register("setupFiles") {
 	}
 
 	copy {
-		outputs.upToDateWhen { false }
 		from "src/main/fabric.mod.template.json"
 		into "src/main/resources"
 		filter(ReplaceTokens, tokens: ["minecraft": minecraftVersion, "version": version])
@@ -99,7 +98,6 @@ tasks.register("setupFiles") {
 
 	if (buildTools.hasJadeSupport()) {
 		copy {
-			outputs.upToDateWhen { false }
 			from "src/main/JadeConfigTemplate.java"
 			into "src/main/java/org/mtr/init"
 			rename "(.+)Template.java", "\$1.java"
@@ -110,14 +108,12 @@ tasks.register("setupFiles") {
 
 	if (buildTools.hasWthitSupport()) {
 		copy {
-			outputs.upToDateWhen { false }
 			from "src/main/WthitConfigTemplate.java"
 			into "src/main/java/org/mtr/init"
 			rename "(.+)Template.java", "\$1.java"
 		}
 
 		copy {
-			outputs.upToDateWhen { false }
 			from "src/main/wthit_plugins_template.json"
 			into "src/main/resources"
 			rename "(.+)_template.json", "\$1.json"
