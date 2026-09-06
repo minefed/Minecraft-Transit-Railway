@@ -6,7 +6,7 @@ This project used at minefed server.
 
 ## Building
 
-Use JDK 21 for Gradle, JDK 17 for the Minecraft 1.20.4 toolchain, and Node.js 22 with npm.
+Use JDK 21 and Node.js 22 with npm. Java compilation uses `--release 17` for Minecraft 1.20.4, preserving Java 17 runtime compatibility.
 Run `./gradlew :fabric:remapJar --configure-on-demand -PminecraftVersion=1.20.4`.
 The Fabric build installs the locked website dependencies, builds the website, and generates its embedded resources before compiling the mod.
 The runtime JAR is written to `fabric/build/libs/fabric-4.0.5.jar`.

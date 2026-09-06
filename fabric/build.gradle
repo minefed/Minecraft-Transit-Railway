@@ -41,10 +41,15 @@ repositories {
 
 java {
 	toolchain {
-		languageVersion.set(JavaLanguageVersion.of(buildTools.javaLanguageVersion))
+		languageVersion.set(JavaLanguageVersion.of(21))
 	}
 	withSourcesJar()
 	withJavadocJar()
+}
+
+tasks.withType(JavaCompile).configureEach {
+	options.release.set(buildTools.javaLanguageVersion)
+	options.encoding = "UTF-8"
 }
 
 tasks.register("setupWebsiteFiles") {
