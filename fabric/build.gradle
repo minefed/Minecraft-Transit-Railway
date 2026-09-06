@@ -143,7 +143,15 @@ tasks.register("setupFiles") {
 }
 
 tasks.named("compileJava") { dependsOn("setupFiles") }
-tasks.named("processResources") { dependsOn("setupFiles") }
+tasks.named("processResources") {
+	dependsOn("setupFiles")
+	from([rootProject.file("LICENSE"), rootProject.file("LICENSE_ORIGINAL")]) {
+		into "META-INF/licenses/mtr"
+	}
+	from(rootProject.file("website/dist/website/3rdpartylicenses.txt")) {
+		into "META-INF/licenses/website"
+	}
+}
 
 build {
 	doLast {
