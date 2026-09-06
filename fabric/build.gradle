@@ -55,10 +55,32 @@ tasks.register("setupWebsiteFiles") {
 //		include "website/*.json", "website/src/styles.css", "website/src/theme.scss"
 //	}
 
-	Generator.generateTypeScript(project, "schema/resource", "../website/src/app/entity/generated")
+	doLast {
+		Generator.generateTypeScript(project, "schema/resource", "../website/src/app/entity/generated")
+	}
+}
+
+def npmCommand = System.getProperty("os.name").toLowerCase(Locale.ROOT).contains("windows") ? ["cmd", "/c", "npm.cmd"] : ["npm"]
+
+tasks.register("installWebsiteDependencies", Exec) {
+	workingDir rootProject.file("website")
+	commandLine npmCommand + ["ci", "--no-audit", "--no-fund"]
+	inputs.files(rootProject.file("website/package.json"), rootProject.file("website/package-lock.json"))
+	outputs.file(rootProject.file("website/node_modules/.package-lock.json"))
+}
+
+tasks.register("buildWebsite", Exec) {
+	dependsOn("setupWebsiteFiles", "installWebsiteDependencies")
+	workingDir rootProject.file("website")
+	commandLine npmCommand + ["run", "build"]
+	inputs.dir(rootProject.file("website/src"))
+	inputs.files(rootProject.file("website/angular.json"), rootProject.file("website/tsconfig.json"), rootProject.file("website/tsconfig.app.json"), rootProject.file("website/package-lock.json"))
+	outputs.dir(rootProject.file("website/dist/website/browser"))
 }
 
 tasks.register("setupFiles") {
+	dependsOn("buildWebsite")
+	doLast {
 	copy {
 		outputs.upToDateWhen { false }
 		from "src/main/KeysTemplate.java"
@@ -116,7 +138,11 @@ tasks.register("setupFiles") {
 	Generator.generateJava(project, "schema/resource", "mod/generated/resource", false, "core.data", "mod.resource")
 	Generator.generateJava(project, "schema/legacy", "legacy/generated/resource", false)
 	WebserverSetup.setup(project.rootDir, "fabric/", "mod")
+	}
 }
+
+tasks.named("compileJava") { dependsOn("setupFiles") }
+tasks.named("processResources") { dependsOn("setupFiles") }
 
 build {
 	doLast {

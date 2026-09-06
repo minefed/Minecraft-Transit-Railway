@@ -216,6 +216,10 @@ gradle-app.setting
 
 # fabric
 
+website/node_modules/
+website/dist/
+website/.angular/
+
 run/
 generated/
 loot_tables/
