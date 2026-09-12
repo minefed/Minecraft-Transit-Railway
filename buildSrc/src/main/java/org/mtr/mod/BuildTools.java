@@ -75,10 +75,6 @@ public class BuildTools {
 		CreatePlayerRendererOffsetMixin.create(minecraftVersion, loader, mixinPath, "org.mtr.mixin");
 	}
 
-	public String getFabricVersion() {
-		return getJson("https://meta.fabricmc.net/v2/versions/loader/" + minecraftVersion).getAsJsonArray().get(0).getAsJsonObject().getAsJsonObject("loader").get("version").getAsString();
-	}
-
 	public String getYarnVersion() {
 		if (minecraftVersion.equals("1.20.1")) {
 			return "1.20.1+build.10"; // 1.20.1 version not working

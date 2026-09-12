@@ -18,7 +18,9 @@ loom {
 dependencies {
 	minecraft "com.mojang:minecraft:${minecraftVersion}"
 	mappings "net.fabricmc:yarn:${buildTools.getYarnVersion()}:v2"
-	modImplementation "net.fabricmc:fabric-loader:${buildTools.getFabricVersion()}"
+	// Newer Mixin APIs encode Redirect.at as an array, which older MixinExtras
+	// cannot read. Compile against a fixed, compatible Loader instead of latest.
+	modImplementation "net.fabricmc:fabric-loader:${fabricLoaderVersion}"
 	modImplementation "net.fabricmc.fabric-api:fabric-api:${buildTools.getFabricApiVersion()}"
 	modApi("com.terraformersmc:modmenu:${buildTools.getModMenuVersion()}") { exclude group: "net.fabricmc", module: "fabric-loader" }
 	shadowImplementation "org.mtr:Minecraft-Mappings-fabric-${minecraftVersion}:0.0.1-dev"
@@ -172,4 +174,21 @@ remapJar {
 test {
 	useJUnitPlatform()
 	testLogging { showStandardStreams = true }
+}
+
+tasks.register("verifyMixinCompatibility", Test) {
+	group = "verification"
+	description = "Checks the distribution JAR's Mixin annotations against older supported runtimes."
+	dependsOn tasks.named("testClasses"), tasks.named("remapJar")
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform()
+	filter { includeTestsMatching "org.mtr.mod.mixin.MixinCompatibilityTest" }
+	final def distributionJar = tasks.named("remapJar").flatMap { it.archiveFile }
+	inputs.file(distributionJar)
+	systemProperty "mtr.test.modJar", distributionJar.get().asFile.absolutePath
+}
+
+tasks.named("check") {
+	dependsOn tasks.named("verifyMixinCompatibility")
 }

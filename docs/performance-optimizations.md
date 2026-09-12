@@ -111,3 +111,42 @@ Minecraft compression enabled, average frame time and p99 frame time, then verif
 boarding, manual controls, sensors, signals, PIDS language/page transitions,
 lighting, resource reloads, and mixed-version connections. Unit tests do not
 replace those in-game measurements.
+
+## Fabric Mixin compatibility
+
+The Fabric build pins `fabricLoaderVersion=0.18.4` in `gradle.properties`.
+Previously the build fetched the latest Loader from Fabric's metadata service.
+Loader 0.19.5 supplied a newer Mixin API in which `Redirect.at()` returns an array.
+Compiling against that API encoded even a single `@At` as an array in both speed
+limit mixins. Loader 0.18.4's MixinExtras 0.5.0 expects a single annotation and
+failed while transforming `Siding`, before the server could start. Its
+[factory redirect transformer](https://raw.githubusercontent.com/LlamaLad7/MixinExtras/0.5.0/src/main/java/com/llamalad7/mixinextras/wrapper/factory/FactoryRedirectWrapperMixinTransformer.java)
+casts the stored `at` value directly to `AnnotationNode`.
+
+The fixed compile dependency restores the compatible annotation encoding. The
+vehicle and timetable speed limit code is unchanged. `MixinCompatibilityTest`
+checks every configured mixin, preserves the separate array encoding required
+by `@Inject`, and verifies that both speed redirects still target calls present
+in the bundled Core. `:fabric:verifyMixinCompatibility` runs those checks against
+the actual remapped distribution JAR and is included in `:fabric:check`.
+
+```text
+gradlew :fabric:verifyMixinCompatibility
+```
+
+When updating the Loader dependency, retain compatibility with supported runtime
+versions and rerun this artifact check. A successful Java compilation alone does
+not verify Mixin application at game startup.
+
+Validation on 2026-09-06 reproduced the old JAR's exact `ArrayList` to
+`AnnotationNode` failure using Fabric Knot with Loader 0.18.4, Mixin
+0.17.0+mixin.0.8.7, and MixinExtras 0.5.0. Under the same runtime, the fixed JAR
+successfully applied both speed redirects, the vehicle speed extension, and the
+path accessor. This smoke check loads transformed Core classes without starting
+the Minecraft server or creating a world; it is not a full gameplay test.
+The same fixed JAR also passed the smoke check with Loader 0.19.5 and its Mixin
+0.17.4+mixin.0.8.7 / MixinExtras 0.5.5 runtime.
+All 45 selected regression tests, the three distribution JAR checks, and Fabric
+and Forge compilation passed. Comparing ZIP entry contents found changes only
+in the two speed mixin classes and the build manifest; the bundled Core and
+Mappings JARs were unchanged.
