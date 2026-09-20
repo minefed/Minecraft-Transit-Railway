@@ -1,5 +1,7 @@
 package org.mtr.mod.render;
 
+import com.mojang.blaze3d.systems.RenderSystem;
+
 import com.logisticscraft.occlusionculling.OcclusionCullingInstance;
 import com.logisticscraft.occlusionculling.util.Vec3d;
 import org.joml.Matrix4f;
@@ -350,8 +352,13 @@ public class RenderRails implements IGui {
 				try {
 					final Matrix4f matrix = ((RailMatrixAccess) (Object) graphicsHolder).mtr$getRailPositionMatrix();
 					final Matrix4f base = new Matrix4f(matrix);
+					final float radius = model.getBoundingRadius();
+					// Shadow passes use a different view; preserve their existing visibility policy.
+					final RailModelFrustum frustum = OptimizedRenderer.renderingShadows() ? null : new RailModelFrustum(
+							RenderSystem.getProjectionMatrix(), RenderSystem.getModelViewMatrix(), base, offset.getXMapped(), offset.getYMapped(), offset.getZMapped());
 					for (RailModelGeometry.Segment segment : geometry.segments) {
-						if (view.isVisible(segment.startX, segment.startY, segment.startZ)) {
+						if (view.isVisible(segment.startX, segment.startY, segment.startZ) &&
+								(frustum == null || frustum.isVisible(segment.x, segment.y, segment.z, radius))) {
 							final BlockPos position = segment.lightPosition();
 							final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.getBlockMapped(), position), world.getLightLevel(LightType.getSkyMapped(), position));
 							segment.transform(matrix, base, offset.getXMapped(), offset.getYMapped(), offset.getZMapped());

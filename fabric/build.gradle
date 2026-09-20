@@ -196,7 +196,10 @@ tasks.register("verifyRailRendering", Test) {
 	testClassesDirs = sourceSets.test.output.classesDirs
 	classpath = sourceSets.test.runtimeClasspath
 	useJUnitPlatform()
-	filter { includeTestsMatching "org.mtr.mod.render.RailModelGeometryTest" }
+	filter {
+		includeTestsMatching "org.mtr.mod.render.RailModelGeometryTest"
+		includeTestsMatching "org.mtr.mod.render.RailModelFrustumTest"
+	}
 }
 
 tasks.named("check") {

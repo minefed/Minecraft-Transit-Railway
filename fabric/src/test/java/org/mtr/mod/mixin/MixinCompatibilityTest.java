@@ -31,6 +31,25 @@ public final class MixinCompatibilityTest {
 	private static final String SPEED_LIMIT_TARGET = "Lorg/mtr/core/data/PathData;getSpeedLimitMetersPerMillisecond()D";
 
 	@Test
+	public void modelBoundsHooksMatchAllBundledModelConstructionPaths() throws IOException {
+		assertTrue(configuredMixins().contains("org/mtr/mixin/RawModelBoundsMixin"));
+		assertTrue(configuredMixins().contains("org/mtr/mixin/OptimizedModelBoundsMixin"));
+		final ClassNode rawModel = readClass("org/mtr/mapping/render/model/RawModel");
+		assertTrue(rawModel.methods.stream().anyMatch(method -> method.name.equals("upload") &&
+				method.desc.equals("(Lorg/mtr/mapping/render/vertex/VertexAttributeMapping;)Ljava/util/List;")));
+		final ClassNode model = readClass("org/mtr/mapping/mapper/OptimizedModel");
+		assertTrue(model.fields.stream().anyMatch(field -> field.name.equals("uploadedParts") && field.desc.equals("Ljava/util/List;")));
+		assertEquals(2, model.methods.stream().filter(method -> method.name.equals("<init>")).count());
+		for (MethodNode handler : readClass("org/mtr/mixin/OptimizedModelBoundsMixin").methods) {
+			if (handler.name.equals("mtr$finishModelBounds")) {
+				final AnnotationNode inject = annotation(handler, INJECT);
+				assertNotNull(inject);
+				assertEquals(List.of("<init>"), value(inject, "method"), "Both single and combined models need bounds");
+			}
+		}
+	}
+
+	@Test
 	public void railMatrixBridgeMatchesBundledRendererAndItsSnapshotContract() throws IOException {
 		final String bridge = "org/mtr/mixin/GraphicsHolderRailMatrixMixin";
 		assertTrue(configuredMixins().contains(bridge));

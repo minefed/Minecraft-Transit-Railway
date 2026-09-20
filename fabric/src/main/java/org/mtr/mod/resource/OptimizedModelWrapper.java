@@ -7,6 +7,7 @@ import org.mtr.mapping.mapper.ModelPartExtension;
 import org.mtr.mapping.mapper.OptimizedModel;
 import org.mtr.mapping.mapper.OptimizedRenderer;
 import org.mtr.mod.Init;
+import org.mtr.mod.render.ModelBoundsAccess;
 
 import javax.annotation.Nullable;
 import java.util.Objects;
@@ -31,6 +32,10 @@ public final class OptimizedModelWrapper {
 
 	private OptimizedModelWrapper(@Nullable OptimizedModel optimizedModel) {
 		this.optimizedModel = optimizedModel;
+	}
+
+	public float getBoundingRadius() {
+		return optimizedModel == null ? Float.POSITIVE_INFINITY : ((ModelBoundsAccess) (Object) optimizedModel).mtr$getModelRadius();
 	}
 
 	public OptimizedModelWrapper(@Nullable OptimizedModelWrapper optimizedModel1, @Nullable OptimizedModelWrapper optimizedModel2) {

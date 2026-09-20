@@ -33,8 +33,8 @@ pre-JOML Minecraft targets require their own bridge before backporting.
    `OptimizedRenderer.queue()` snapshots the position matrix into
    `VertexAttributeState`; `BatchManager` groups `RenderCall`s by material.
    At frame end the optimized renderer submits those calls. This patch batches
-   CPU scheduling; it does not merge meshes or reduce the renderer's GPU draw
-   call count.
+   CPU scheduling. The later frustum filter also removes off-screen submissions;
+   visible pieces still use the original mesh and draw path.
 7. The non-optimized path uses `DynamicVehicleModel`. 2D track surfaces, signals,
    arrows, cable lines and node markers use their original rendering paths.
 
@@ -64,6 +64,21 @@ so the unused normal rotations and per-piece stack copies are eliminated.
 The small loader-specific `GraphicsHolderRailMatrixMixin` exposes that position
 matrix; it is registered on the client only.
 
+`RawModelBoundsMixin` measures the actual transformed vertices at upload time,
+covering Blockbench and OBJ/MQO resources. A weak registry passes conservative
+origin-centered sphere radii to `OptimizedModelBoundsMixin`; combined models
+take the maximum radius. The registry does not keep GPU objects alive. Models
+created outside this upload path and invalid bounds fail open.
+
+`RailModelFrustum` uses `projection * modelView * base`, matching the bundled
+`PatchingResourceProvider` vertex shader. It subtracts the same double-precision
+camera offset as model placement. Whole model spheres, including custom models,
+must be outside the frustum before their lighting and queue work is skipped.
+Bounds include a rounding margin, and degenerate projections fail open. Shader
+shadow passes retain the previous visibility policy. Geometry and texture detail
+are unchanged. The culler uses JOML's normalized sphere/plane intersection tests
+([API](https://joml-ci.github.io/JOML/apidocs/org/joml/FrustumIntersection.html)).
+
 Resource reload, client data reset, disconnect and world replacement clear the
 cache. Existing tool previews and streaming fallback retain their original
 appearance and dynamic-model behavior. Lighting remains current every frame;
@@ -78,6 +93,11 @@ downhill rails, both directions, several repeat intervals and world-border
 coordinates. It compares 10,000 camera cases to the original Vec3d rotations
 and checks the 32-block near radius and render-distance boundaries. Separate
 cases exercise replacement, all cache parameters, clearing and LRU limits.
+
+`RailModelFrustumTest` checks screen/near-plane crossings, large custom bounds,
+invalid data and 20,000 varied shader-space vertex cases, including slopes,
+rotations, nonuniform base scales and world-border offsets. Any vertex on screen
+must survive the model-level sphere test.
 
 `MixinCompatibilityTest` checks the bridge against the matrix field in the
 bundled/remapped GraphicsHolder and verifies the optimized renderer's matrix
