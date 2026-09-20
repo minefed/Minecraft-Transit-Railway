@@ -396,6 +396,7 @@ public final class InitClient {
 		});
 
 		REGISTRY_CLIENT.eventRegistryClient.registerClientDisconnect(() -> {
+			RenderRails.clearModelCache();
 			PacketCodecCapabilities.resetClient();
 			PacketFetchArrivals.clearCallbacks();
 			PacketCheckRouteIdHasDisabledAnnouncements.clearCallbacks();

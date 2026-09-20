@@ -8,6 +8,7 @@ import org.objectweb.asm.ClassReader;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
@@ -28,6 +29,39 @@ public final class MixinCompatibilityTest {
 	private static final String INJECT = "Lorg/spongepowered/asm/mixin/injection/Inject;";
 	private static final String AT = "Lorg/spongepowered/asm/mixin/injection/At;";
 	private static final String SPEED_LIMIT_TARGET = "Lorg/mtr/core/data/PathData;getSpeedLimitMetersPerMillisecond()D";
+
+	@Test
+	public void railMatrixBridgeMatchesBundledRendererAndItsSnapshotContract() throws IOException {
+		final String bridge = "org/mtr/mixin/GraphicsHolderRailMatrixMixin";
+		assertTrue(configuredMixins().contains(bridge));
+		final ClassNode mixin = readClass(bridge);
+		final ClassNode graphics = readClass("org/mtr/mapping/mapper/GraphicsHolder");
+		String shadowDescriptor = null;
+		for (FieldNode field : mixin.fields) {
+			if (field.name.equals("matrixStack")) {
+				shadowDescriptor = field.desc;
+			}
+		}
+		assertNotNull(shadowDescriptor);
+		boolean matched = false;
+		for (FieldNode field : graphics.fields) {
+			matched |= field.name.equals("matrixStack") && field.desc.equals(shadowDescriptor);
+		}
+		assertTrue(matched, "The remapped bridge must shadow the actual bundled matrix stack");
+		boolean snapshot = false;
+		for (MethodNode method : readClass("org/mtr/mapping/mapper/OptimizedRenderer").methods) {
+			if (method.name.equals("queue")) {
+				for (AbstractInsnNode instruction : method.instructions) {
+					if (instruction instanceof MethodInsnNode) {
+						final MethodInsnNode invocation = (MethodInsnNode) instruction;
+						assertFalse(invocation.desc.contains("org/joml/Matrix3f"), "Rail batching assumes queue does not consume the normal matrix");
+						snapshot |= invocation.name.equals("copy") && invocation.desc.contains("Matrix4f;");
+					}
+				}
+			}
+		}
+		assertTrue(snapshot, "queue must snapshot the position matrix before the next rail piece overwrites it");
+	}
 
 	@Test
 	public void configuredRedirectsUseScalarInjectionPointsForOlderMixinExtras() throws IOException {

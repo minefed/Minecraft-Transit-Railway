@@ -2,6 +2,7 @@ package org.mtr.mod.render;
 
 import com.logisticscraft.occlusionculling.OcclusionCullingInstance;
 import com.logisticscraft.occlusionculling.util.Vec3d;
+import org.joml.Matrix4f;
 import org.mtr.core.data.Rail;
 import org.mtr.core.data.TransportMode;
 import org.mtr.core.tool.Angle;
@@ -35,6 +36,7 @@ import org.mtr.mod.item.ItemRailModifier;
 import org.mtr.mod.model.ModelSmallCube;
 import org.mtr.mod.packet.PacketUpdateLastRailStyles;
 import org.mtr.mod.resource.RailResource;
+import org.mtr.mod.resource.OptimizedModelWrapper;
 
 import javax.annotation.Nullable;
 import java.util.Collections;
@@ -54,6 +56,9 @@ public class RenderRails implements IGui {
 	private static final Property<Boolean> NODE_22_5_PROPERTY = new Property<>(BlockNode.IS_22_5.data);
 	private static final int INVALID_NODE_CHECK_RADIUS = 16;
 	private static final double LIGHT_REFERENCE_OFFSET = 0.1;
+	private static final RailGeometryCache MODEL_GEOMETRY = new RailGeometryCache(131072, 2048);
+	private static Object geometryWorld;
+	private static RailRenderView renderView;
 	private static final ModelSmallCube MODEL_SMALL_CUBE = new ModelSmallCube(new Identifier(Init.MOD_ID, "textures/block/white.png"));
 
 	public static void render() {
@@ -62,8 +67,19 @@ public class RenderRails implements IGui {
 		final ClientPlayerEntity clientPlayerEntity = minecraftClient.getPlayerMapped();
 
 		if (clientWorld == null || clientPlayerEntity == null) {
+			clearModelCache();
 			return;
 		}
+		if (geometryWorld != clientWorld.data) {
+			clearModelCache();
+			geometryWorld = clientWorld.data;
+		}
+		final Camera renderCamera = minecraftClient.getGameRendererMapped().getCamera();
+		final Vector3d viewPosition = renderCamera.getPos();
+		final float viewYaw = (float) Math.toRadians(renderCamera.getYaw());
+		final float viewPitch = (float) Math.toRadians(renderCamera.getPitch());
+		renderView = new RailRenderView(viewPosition.getXMapped(), viewPosition.getYMapped(), viewPosition.getZMapped(), MinecraftClientHelper.getRenderDistance() * 16,
+				MathHelper.sin(viewYaw), MathHelper.cos(viewYaw), MathHelper.sin(viewPitch), MathHelper.cos(viewPitch));
 
 		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
 		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
@@ -266,6 +282,15 @@ public class RenderRails implements IGui {
 				final boolean flip = newStyle.endsWith("_2");
 				final RailResource railResource = CustomResourceLoader.getRailById(RailResource.getIdWithoutDirection(newStyle));
 				if (railResource != null) {
+					final MinecraftClientData.RailWrapper wrapper = MinecraftClientData.getInstance().railWrapperList.get(rail.getHexId());
+					// Previews are rebuilt every frame. Keep them on the streaming path so
+					// they cannot evict stable geometry or retain a succession of ghost rails.
+					final RailModelGeometry geometry = OptimizedRenderer.hasOptimizedRendering() && wrapper != null && wrapper.getRail() == rail ?
+							MODEL_GEOMETRY.get(rail.railMath, railResource.getRepeatInterval(), railResource.getModelYOffset(), flip) : null;
+					if (geometry != null) {
+						renderType[1] |= renderRailModels(clientWorld, railResource, geometry, renderView);
+						continue;
+					}
 					renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
 						final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
 						final double differenceX = x3 - x1;
@@ -299,6 +324,48 @@ public class RenderRails implements IGui {
 				});
 			}, 0.5, -railWidth, railWidth);
 		}
+	}
+
+	public static void clearModelCache() {
+		MODEL_GEOMETRY.clear();
+		geometryWorld = null;
+	}
+
+	private static boolean renderRailModels(ClientWorld world, RailResource resource, RailModelGeometry geometry, RailRenderView view) {
+		boolean visible = false;
+		for (RailModelGeometry.Segment segment : geometry.segments) {
+			if (view.isVisible(segment.startX, segment.startY, segment.startZ)) {
+				visible = true;
+				break;
+			}
+		}
+		if (!visible) {
+			return false;
+		}
+		// Refresh the resource's lifetime once per rail/style, not twice per model piece.
+		final OptimizedModelWrapper model = resource.getOptimizedModel();
+		if (model != null) {
+			MainRenderer.scheduleRender(QueuedRenderLayer.TEXT, (graphicsHolder, offset) -> {
+				graphicsHolder.push();
+				try {
+					final Matrix4f matrix = ((RailMatrixAccess) (Object) graphicsHolder).mtr$getRailPositionMatrix();
+					final Matrix4f base = new Matrix4f(matrix);
+					for (RailModelGeometry.Segment segment : geometry.segments) {
+						if (view.isVisible(segment.startX, segment.startY, segment.startZ)) {
+							final BlockPos position = segment.lightPosition();
+							final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.getBlockMapped(), position), world.getLightLevel(LightType.getSkyMapped(), position));
+							segment.transform(matrix, base, offset.getXMapped(), offset.getYMapped(), offset.getZMapped());
+							// OptimizedRenderer.queue copies only the position matrix;
+							// the MatrixStack normal matrix is not consumed by this path.
+							CustomResourceLoader.OPTIMIZED_RENDERER_WRAPPER.queue(model, graphicsHolder, light);
+						}
+					}
+				} finally {
+					graphicsHolder.pop();
+				}
+			});
+		}
+		return true;
 	}
 
 	private static void renderSignalsStandard(ClientWorld clientWorld, Rail rail) {

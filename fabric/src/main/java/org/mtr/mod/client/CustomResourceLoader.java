@@ -12,6 +12,7 @@ import org.mtr.mod.Init;
 import org.mtr.mod.Keys;
 import org.mtr.mod.config.Config;
 import org.mtr.mod.render.RenderLifts;
+import org.mtr.mod.render.RenderRails;
 import org.mtr.mod.render.RenderPIDS;
 import org.mtr.mod.render.RenderRailwaySign;
 import org.mtr.mod.resource.*;
@@ -76,6 +77,7 @@ public class CustomResourceLoader {
 	}
 
 	public static void reload() {
+		RenderRails.clearModelCache();
 		RenderLifts.clearModelCache();
 		RenderPIDS.clearTextWidthCache();
 		RenderRailwaySign.clearLayoutCache();

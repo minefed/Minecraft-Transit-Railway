@@ -12,6 +12,7 @@
 		"VehicleSpeedLimitMixin"
 	],
 	"client": [
+		"GraphicsHolderRailMatrixMixin",
 		"ClientWorldRenderingMixin",
 		"PlayerRendererOffsetMixin"
 	],
