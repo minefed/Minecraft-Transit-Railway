@@ -83,6 +83,26 @@ public final class MixinCompatibilityTest {
 	}
 
 	@Test
+	public void doorScanChunkHooksAreClientOnlyAndRemapped() throws IOException {
+		final String mixin = "org/mtr/mixin/WorldChunkDoorScanMixin";
+		assertTrue(configuredMixins("client").contains(mixin), "The door scan epoch must only be tracked on the client");
+		assertFalse(configuredMixins("mixins").contains(mixin));
+		final List<String> targets = new ArrayList<>();
+		for (MethodNode handler : readClass(mixin).methods) {
+			final AnnotationNode inject = annotation(handler, INJECT);
+			if (inject != null) {
+				targets.addAll(stringValues(inject, "method"));
+			}
+		}
+		assertEquals(List.of("setBlockState", "loadFromPacket"), targets);
+		// Unresolved targets would fail at startup because the config requires every injection.
+		final JsonObject mappings = JsonParser.parseString(new String(readResource("mtr.refmap.json"), StandardCharsets.UTF_8)).getAsJsonObject().getAsJsonObject("mappings").getAsJsonObject(mixin);
+		assertNotNull(mappings, "The door scan hooks must be remapped");
+		assertEquals("Lnet/minecraft/class_2818;method_12010(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;Z)Lnet/minecraft/class_2680;", mappings.get("setBlockState").getAsString());
+		assertEquals("Lnet/minecraft/class_2818;method_12224(Lnet/minecraft/class_2540;Lnet/minecraft/class_2487;Ljava/util/function/Consumer;)V", mappings.get("loadFromPacket").getAsString());
+	}
+
+	@Test
 	public void configuredRedirectsUseScalarInjectionPointsForOlderMixinExtras() throws IOException {
 		int checked = 0;
 		for (String className : configuredMixins()) {
@@ -165,10 +185,14 @@ public final class MixinCompatibilityTest {
 	}
 
 	private static List<String> configuredMixins() throws IOException {
+		return configuredMixins("mixins", "client", "server");
+	}
+
+	private static List<String> configuredMixins(String... sides) throws IOException {
 		final JsonObject config = JsonParser.parseString(new String(readResource("mtr.mixins.json"), StandardCharsets.UTF_8)).getAsJsonObject();
 		final String prefix = config.get("package").getAsString().replace('.', '/') + "/";
 		final List<String> result = new ArrayList<>();
-		for (String side : new String[]{"mixins", "client", "server"}) {
+		for (String side : sides) {
 			if (config.has(side)) {
 				for (JsonElement name : config.getAsJsonArray(side)) {
 					result.add(prefix + name.getAsString().replace('.', '/'));
@@ -204,6 +228,17 @@ public final class MixinCompatibilityTest {
 			}
 		}
 		return null;
+	}
+
+	private static List<String> stringValues(AnnotationNode annotation, String key) {
+		final List<String> result = new ArrayList<>();
+		final Object values = value(annotation, key);
+		if (values instanceof List) {
+			for (Object value : (List<?>) values) {
+				result.add((String) value);
+			}
+		}
+		return result;
 	}
 
 	private static byte[] readResource(String name) throws IOException {

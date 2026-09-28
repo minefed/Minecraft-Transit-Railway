@@ -15,6 +15,7 @@
 		"GraphicsHolderRailMatrixMixin",
 		"RawModelBoundsMixin",
 		"OptimizedModelBoundsMixin",
+		"WorldChunkDoorScanMixin",
 		"ClientWorldRenderingMixin",
 		"PlayerRendererOffsetMixin"
 	],

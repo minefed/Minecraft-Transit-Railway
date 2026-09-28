@@ -8,12 +8,18 @@ import org.mtr.mod.Items;
 import org.mtr.mod.block.BlockPSDAPGDoorBase;
 import org.mtr.mod.block.PlatformHelper;
 
+import javax.annotation.Nullable;
+
 public class RenderVehicleHelper {
 
 	public static final float HALF_PLAYER_WIDTH = 0.3F;
 	private static final int CHECK_DOOR_RADIUS_XZ = 1;
 	private static final int CHECK_DOOR_RADIUS_Y = 2;
 	private static final double RIDE_STEP_THRESHOLD = 0.75;
+	private static final int MAX_CACHED_DOOR_SCANS = 1024;
+	private static final Property<Boolean> UNLOCKED = new Property<>(BlockPSDAPGDoorBase.UNLOCKED.data);
+	private static final DoorScanCache<BlockPos> DOOR_SCAN_CACHE = new DoorScanCache<>(MAX_CACHED_DOOR_SCANS);
+	private static final DoorScanBlockSource DOOR_SCAN_BLOCK_SOURCE = new DoorScanBlockSource();
 
 	/**
 	 * @return whether the doorway is close to platform blocks, unlocked platform screen doors, or unlocked automatic platform gates
@@ -34,28 +40,75 @@ public class RenderVehicleHelper {
 		final double maxY = Math.max(Math.max(doorwayPosition1.getYMapped(), doorwayPosition2.getYMapped()), Math.max(doorwayPosition3.getYMapped(), doorwayPosition4.getYMapped()));
 		final double minZ = Math.min(Math.min(doorwayPosition1.getZMapped(), doorwayPosition2.getZMapped()), Math.min(doorwayPosition3.getZMapped(), doorwayPosition4.getZMapped()));
 		final double maxZ = Math.max(Math.max(doorwayPosition1.getZMapped(), doorwayPosition2.getZMapped()), Math.max(doorwayPosition3.getZMapped(), doorwayPosition4.getZMapped()));
+
+		// Door values only change block entity fields, so the cached scan may run before they are applied.
+		DOOR_SCAN_BLOCK_SOURCE.clientWorld = clientWorld;
+		final DoorScanCache.Result<BlockPos> doorScan;
+		try {
+			doorScan = DOOR_SCAN_CACHE.get(minX - CHECK_DOOR_RADIUS_XZ, maxX + CHECK_DOOR_RADIUS_XZ, minY - CHECK_DOOR_RADIUS_Y, maxY + CHECK_DOOR_RADIUS_Y, minZ - CHECK_DOOR_RADIUS_XZ, maxZ + CHECK_DOOR_RADIUS_XZ, DOOR_SCAN_BLOCK_SOURCE);
+		} finally {
+			DOOR_SCAN_BLOCK_SOURCE.clientWorld = null;
+		}
+		if (doorScan == null) {
+			return scanDoors(clientWorld, minX, maxX, minY, maxY, minZ, maxZ, doorValue);
+		}
+
+		for (final BlockPos checkPos : doorScan.unlockedDoors) {
+			setDoorValue(clientWorld, checkPos, doorValue);
+		}
+
+		return doorScan.canOpenDoors;
+	}
+
+	public static void clearDoorScanCache() {
+		DOOR_SCAN_CACHE.clear();
+	}
+
+	/**
+	 * @return whether adding, removing or changing this block can change the result of {@link #canOpenDoors}
+	 */
+	public static boolean affectsDoorScan(Object block) {
+		return block instanceof PlatformHelper || block instanceof BlockPSDAPGDoorBase;
+	}
+
+	private static boolean scanDoors(ClientWorld clientWorld, double minX, double maxX, double minY, double maxY, double minZ, double maxZ, double doorValue) {
 		boolean canOpenDoors = false;
 
 		for (double checkX = minX - CHECK_DOOR_RADIUS_XZ; checkX <= maxX + CHECK_DOOR_RADIUS_XZ; checkX++) {
 			for (double checkY = minY - CHECK_DOOR_RADIUS_Y; checkY <= maxY + CHECK_DOOR_RADIUS_Y; checkY++) {
 				for (double checkZ = minZ - CHECK_DOOR_RADIUS_XZ; checkZ <= maxZ + CHECK_DOOR_RADIUS_XZ; checkZ++) {
 					final BlockPos checkPos = Init.newBlockPos(checkX, checkY, checkZ);
-					final BlockState blockState = clientWorld.getBlockState(checkPos);
-					final Block block = blockState.getBlock();
-					if (block.data instanceof PlatformHelper) {
+					final int blockType = getDoorScanBlockType(clientWorld, checkPos);
+					if (blockType == DoorScanCache.PLATFORM) {
 						canOpenDoors = true;
-					} else if (block.data instanceof BlockPSDAPGDoorBase && blockState.get(new Property<>(BlockPSDAPGDoorBase.UNLOCKED.data))) {
+					} else if (blockType == DoorScanCache.UNLOCKED_DOOR) {
 						canOpenDoors = true;
-						final BlockEntity blockEntity = clientWorld.getBlockEntity(checkPos);
-						if (blockEntity != null && blockEntity.data instanceof BlockPSDAPGDoorBase.BlockEntityBase) {
-							((BlockPSDAPGDoorBase.BlockEntityBase) blockEntity.data).setDoorValue(doorValue);
-						}
+						setDoorValue(clientWorld, checkPos, doorValue);
 					}
 				}
 			}
 		}
 
 		return canOpenDoors;
+	}
+
+	private static int getDoorScanBlockType(ClientWorld clientWorld, BlockPos checkPos) {
+		final BlockState blockState = clientWorld.getBlockState(checkPos);
+		final Block block = blockState.getBlock();
+		if (block.data instanceof PlatformHelper) {
+			return DoorScanCache.PLATFORM;
+		} else if (block.data instanceof BlockPSDAPGDoorBase && blockState.get(UNLOCKED)) {
+			return DoorScanCache.UNLOCKED_DOOR;
+		} else {
+			return DoorScanCache.OTHER;
+		}
+	}
+
+	private static void setDoorValue(ClientWorld clientWorld, BlockPos checkPos, double doorValue) {
+		final BlockEntity blockEntity = clientWorld.getBlockEntity(checkPos);
+		if (blockEntity != null && blockEntity.data instanceof BlockPSDAPGDoorBase.BlockEntityBase) {
+			((BlockPSDAPGDoorBase.BlockEntityBase) blockEntity.data).setDoorValue(doorValue);
+		}
 	}
 
 	public static double getDoorBlockedAmount(Box doorway, double playerX, double playerY, double playerZ) {
@@ -125,5 +178,33 @@ public class RenderVehicleHelper {
 				(float) (corner2.getXMapped() - offset.getXMapped()), (float) (corner2.getYMapped() - offset.getYMapped()), (float) (corner2.getZMapped() - offset.getZMapped()),
 				color
 		);
+	}
+
+	/** Render-thread view of the client world for {@link DoorScanCache}. */
+	private static final class DoorScanBlockSource implements DoorScanCache.BlockSource<BlockPos> {
+
+		private ClientWorld clientWorld;
+
+		@Override
+		public BlockPos createPosition(int x, int y, int z) {
+			return new BlockPos(x, y, z);
+		}
+
+		@Override
+		public int getBlockType(BlockPos position) {
+			return getDoorScanBlockType(clientWorld, position);
+		}
+
+		@Nullable
+		@Override
+		public Object getChunk(int chunkX, int chunkZ) {
+			final WorldChunk worldChunk = clientWorld.getChunk(chunkX, chunkZ);
+			return worldChunk == null ? null : worldChunk.data;
+		}
+
+		@Override
+		public long getChunkEpoch(Object chunk) {
+			return chunk instanceof DoorScanChunkAccess ? ((DoorScanChunkAccess) chunk).mtr$getDoorScanEpoch() : DoorScanCache.UNTRACKED;
+		}
 	}
 }

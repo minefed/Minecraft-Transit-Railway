@@ -15,6 +15,7 @@ import org.mtr.mod.block.BlockNode;
 import org.mtr.mod.data.PersistentVehicleData;
 import org.mtr.mod.data.VehicleExtension;
 import org.mtr.mod.render.RenderRails;
+import org.mtr.mod.render.RenderVehicleHelper;
 import org.mtr.mod.screen.DashboardListItem;
 
 import javax.annotation.Nullable;
@@ -155,6 +156,7 @@ public final class MinecraftClientData extends ClientData {
 
 	public static void reset() {
 		RenderRails.clearModelCache();
+		RenderVehicleHelper.clearDoorScanCache();
 		MinecraftClientData.instance = new MinecraftClientData();
 		MinecraftClientData.dashboardInstance = new MinecraftClientData();
 	}

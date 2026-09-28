@@ -235,6 +235,7 @@ forge/src/main/java/org/mtr/mixin/*
 !fabric/src/main/java/org/mtr/mixin/VehicleExtraDataMixin.java
 !fabric/src/main/java/org/mtr/mixin/SidingSpeedLimitMixin.java
 !fabric/src/main/java/org/mtr/mixin/VehicleSpeedLimitMixin.java
+!fabric/src/main/java/org/mtr/mixin/WorldChunkDoorScanMixin.java
 !forge/src/main/java/org/mtr/mixin/PathDataAccessor.java
 !forge/src/main/java/org/mtr/mixin/GraphicsHolderRailMatrixMixin.java
 !forge/src/main/java/org/mtr/mixin/RawModelBoundsMixin.java
@@ -242,6 +243,7 @@ forge/src/main/java/org/mtr/mixin/*
 !forge/src/main/java/org/mtr/mixin/VehicleExtraDataMixin.java
 !forge/src/main/java/org/mtr/mixin/SidingSpeedLimitMixin.java
 !forge/src/main/java/org/mtr/mixin/VehicleSpeedLimitMixin.java
+!forge/src/main/java/org/mtr/mixin/WorldChunkDoorScanMixin.java
 fabric/logs
 forge/src/main/java/org/mtr/core
 forge/src/main/java/org/mtr/legacy
