@@ -24,10 +24,10 @@ public final class WorkerThread extends CustomThread {
 	private static final int MAX_QUEUE_SIZE = 2;
 	private int renderDistance = -1;
 	private OcclusionCullingInstance occlusionCullingInstance;
-	private final Queue<Consumer<OcclusionCullingInstance>> occlusionQueueVehicle = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
-	private final Queue<Consumer<OcclusionCullingInstance>> occlusionQueueLift = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
-	private final Queue<Consumer<OcclusionCullingInstance>> occlusionQueueMisc = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
-	private final Queue<Consumer<OcclusionCullingInstance>> occlusionQueueRail = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueVehicle = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueLift = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueMisc = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
+	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueRail = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
 	private final Queue<Runnable> dynamicTextureQueue = new ConcurrentLinkedQueue<>();
 
 	@Override
@@ -69,6 +69,22 @@ public final class WorkerThread extends CustomThread {
 
 	public void scheduleMTRRails(Consumer<OcclusionCullingInstance> consumer) {
 		occlusionQueueRail.offer(consumer);
+	}
+
+	/**
+	 * A full queue drops the next offer. Checking this before collecting culling tasks skips work
+	 * that would be discarded, as if the worker had polled after the offer instead of before it.
+	 */
+	public boolean canScheduleVehicles() {
+		return occlusionQueueVehicle.remainingCapacity() > 0;
+	}
+
+	public boolean canScheduleLifts() {
+		return occlusionQueueLift.remainingCapacity() > 0;
+	}
+
+	public boolean canScheduleMTRRails() {
+		return occlusionQueueRail.remainingCapacity() > 0;
 	}
 
 	public void scheduleDynamicTextures(Runnable runnable) {

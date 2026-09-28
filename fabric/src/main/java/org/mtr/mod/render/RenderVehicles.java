@@ -41,7 +41,8 @@ public class RenderVehicles implements IGui {
 			return;
 		}
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
+		// Tasks offered to a full queue would be dropped, so skip collecting them
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() || !MainRenderer.WORKER_THREAD.canScheduleVehicles() ? null : new ObjectArrayList<>();
 		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = cameraPosition == null ? null : new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 

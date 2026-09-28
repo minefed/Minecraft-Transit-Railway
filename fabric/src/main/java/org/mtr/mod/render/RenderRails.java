@@ -83,7 +83,8 @@ public class RenderRails implements IGui {
 		renderView = new RailRenderView(viewPosition.getXMapped(), viewPosition.getYMapped(), viewPosition.getZMapped(), MinecraftClientHelper.getRenderDistance() * 16,
 				MathHelper.sin(viewYaw), MathHelper.cos(viewYaw), MathHelper.sin(viewPitch), MathHelper.cos(viewPitch));
 
-		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() ? null : new ObjectArrayList<>();
+		// Tasks offered to a full queue would be dropped, so skip collecting them
+		final ObjectArrayList<Function<OcclusionCullingInstance, Runnable>> cullingTasks = OptimizedRenderer.renderingShadows() || !MainRenderer.WORKER_THREAD.canScheduleMTRRails() ? null : new ObjectArrayList<>();
 		final Vector3d cameraPosition = cullingTasks == null ? null : minecraftClient.getGameRendererMapped().getCamera().getPos();
 		final Vec3d camera = cameraPosition == null ? null : new Vec3d(cameraPosition.getXMapped(), cameraPosition.getYMapped(), cameraPosition.getZMapped());
 		final boolean holdingRailRelated = isHoldingRailRelated(clientPlayerEntity);
