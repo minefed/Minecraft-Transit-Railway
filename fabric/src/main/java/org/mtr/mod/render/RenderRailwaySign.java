@@ -33,12 +33,15 @@ import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.WeakHashMap;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends BlockEntityRenderer<T> implements IBlock, IGui, IDrawing {
 
 	private static final Identifier WHITE_TEXTURE = new Identifier(Init.MOD_ID, "textures/block/white.png");
 	private static final WeakHashMap<String[], SignLayout> SIGN_LAYOUT_CACHE = new WeakHashMap<>();
+	// String.split compiles multi-character patterns on every call
+	private static final Pattern ROUTE_NAME_SEPARATOR = Pattern.compile("\\|\\|");
 	private static int cachedResourceGeneration = -1;
 
 	public RenderRailwaySign(Argument dispatcher) {
@@ -196,7 +199,7 @@ public class RenderRailwaySign<T extends BlockRailwaySign.BlockEntity> extends B
 				if (!simplifiedRoute.getName().isEmpty()) {
 					final int color = simplifiedRoute.getColor();
 					if (!addedColors.contains(color) && selectedIds.contains(color) && simplifiedRoute.getPlatforms().stream().anyMatch(simplifiedRoutePlatform -> platformIds.contains(simplifiedRoutePlatform.getPlatformId()))) {
-						selectedRoutesSorted.add(new IntObjectImmutablePair<>(color, simplifiedRoute.getName().split("\\|\\|")[0]));
+						selectedRoutesSorted.add(new IntObjectImmutablePair<>(color, ROUTE_NAME_SEPARATOR.split(simplifiedRoute.getName())[0]));
 						addedColors.add(color);
 					}
 				}
