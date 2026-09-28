@@ -162,6 +162,55 @@ public final class MixinCompatibilityTest {
 	}
 
 	@Test
+	public void vehicleUpdateCopySkipsOnlyTheUnusedDetachedPath() throws IOException {
+		final String mixin = "org/mtr/mixin/VehicleExtraDataCopyMixin";
+		final String copyPath = "Lorg/mtr/core/data/VehicleExtraData;copyPath(Lorg/mtr/libraries/it/unimi/dsi/fastutil/objects/ObjectArrayList;)Lorg/mtr/libraries/it/unimi/dsi/fastutil/objects/ObjectArrayList;";
+		assertTrue(configuredMixins("mixins").contains(mixin));
+		int redirects = 0;
+		for (MethodNode handler : readClass(mixin).methods) {
+			final AnnotationNode redirect = annotation(handler, REDIRECT);
+			if (redirect != null) {
+				assertEquals(List.of("copy"), stringValues(redirect, "method"));
+				assertEquals(copyPath, value((AnnotationNode) value(redirect, "at"), "target"));
+				redirects++;
+			}
+		}
+		assertEquals(1, redirects);
+
+		// copy() passes the detached path only to the constructor, then clears and refills its path field.
+		final List<String> sequence = new ArrayList<>();
+		for (AbstractInsnNode instruction : method(readClass("org/mtr/core/data/VehicleExtraData"), "copy", "(I)Lorg/mtr/core/data/VehicleExtraData;").instructions) {
+			if (instruction instanceof MethodInsnNode) {
+				final MethodInsnNode invocation = (MethodInsnNode) instruction;
+				final String call = "L" + invocation.owner + ";" + invocation.name + invocation.desc;
+				if (call.equals(copyPath) || invocation.name.equals("<init>") && invocation.owner.equals("org/mtr/core/data/VehicleExtraData") || invocation.name.equals("clear")) {
+					sequence.add(invocation.name);
+				}
+			} else if (instruction instanceof FieldInsnNode && ((FieldInsnNode) instruction).name.equals("immutablePath")) {
+				fail("copy() must not read the copied immutablePath");
+			}
+		}
+		assertEquals(List.of("copyPath", "<init>", "clear"), sequence);
+
+		// The copy's only consumer is the serialized vehicle update.
+		final List<String> callers = new ArrayList<>();
+		for (ClassNode classNode : coreClasses()) {
+			for (MethodNode method : classNode.methods) {
+				for (AbstractInsnNode instruction : method.instructions) {
+					if (instruction instanceof MethodInsnNode && ((MethodInsnNode) instruction).owner.equals("org/mtr/core/data/VehicleExtraData") && ((MethodInsnNode) instruction).name.equals("copy")) {
+						callers.add(classNode.name + "." + method.name);
+					}
+					if (instruction instanceof FieldInsnNode && ((FieldInsnNode) instruction).name.equals("immutablePath")) {
+						assertFalse(classNode.name.startsWith("org/mtr/core/operation/VehicleUpdate") || classNode.name.startsWith("org/mtr/core/generated/operation/VehicleUpdate") || classNode.name.contains("VehicleLiftResponse") || classNode.name.equals("org/mtr/core/data/Client"),
+								classNode.name + " must not read immutablePath from a vehicle update copy");
+					}
+				}
+			}
+		}
+		assertEquals(List.of("org/mtr/core/data/Client.update"), callers);
+	}
+
+	@Test
 	public void configuredRedirectsUseScalarInjectionPointsForOlderMixinExtras() throws IOException {
 		int checked = 0;
 		for (String className : configuredMixins()) {
@@ -287,6 +336,36 @@ public final class MixinCompatibilityTest {
 			}
 		}
 		return null;
+	}
+
+	private static List<ClassNode> coreClasses() throws IOException {
+		final String modJar = System.getProperty("mtr.test.modJar");
+		final String archivePath;
+		if (modJar != null && !modJar.isEmpty()) {
+			archivePath = modJar;
+		} else {
+			try {
+				archivePath = new java.io.File(org.mtr.core.data.VehicleExtraData.class.getProtectionDomain().getCodeSource().getLocation().toURI()).getPath();
+			} catch (java.net.URISyntaxException e) {
+				throw new IOException(e);
+			}
+		}
+		final List<ClassNode> result = new ArrayList<>();
+		try (ZipFile archive = new ZipFile(archivePath)) {
+			final java.util.Enumeration<? extends ZipEntry> entries = archive.entries();
+			while (entries.hasMoreElements()) {
+				final ZipEntry entry = entries.nextElement();
+				if (entry.getName().startsWith("org/mtr/core/") && entry.getName().endsWith(".class")) {
+					try (InputStream input = archive.getInputStream(entry)) {
+						final ClassNode node = new ClassNode();
+						new ClassReader(readBytes(input)).accept(node, ClassReader.SKIP_DEBUG | ClassReader.SKIP_FRAMES);
+						result.add(node);
+					}
+				}
+			}
+		}
+		assertTrue(result.size() > 100, "Core classes must be scanned");
+		return result;
 	}
 
 	private static MethodNode method(ClassNode classNode, String name, String descriptor) {

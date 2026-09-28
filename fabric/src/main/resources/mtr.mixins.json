@@ -8,6 +8,7 @@
 		"PlayerTeleportationStateAccessor",
 		"PathDataAccessor",
 		"VehicleExtraDataMixin",
+		"VehicleExtraDataCopyMixin",
 		"SidingSpeedLimitMixin",
 		"VehicleSpeedLimitMixin"
 	],
