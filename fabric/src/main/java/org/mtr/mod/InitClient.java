@@ -504,7 +504,7 @@ public final class InitClient {
 	}
 
 	public static Station findStation(BlockPos blockPos) {
-		return MinecraftClientData.getInstance().stations.stream().filter(station -> station.inArea(Init.blockPosToPosition(blockPos))).findFirst().orElse(null);
+		return MinecraftClientData.getInstance().findStation(blockPos.getX(), blockPos.getY(), blockPos.getZ());
 	}
 
 	public static void findClosePlatform(BlockPos blockPos, int radius, Consumer<Platform> consumer) {

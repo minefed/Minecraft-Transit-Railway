@@ -36,6 +36,13 @@ public final class MinecraftClientData extends ClientData {
 	public final ObjectArrayList<DashboardListItem> railActions = new ObjectArrayList<>();
 
 	private final LongAVLTreeSet routeIdsWithDisabledAnnouncements = new LongAVLTreeSet();
+	/** Results of {@link #findStation(int, int, int)}, including misses; cleared when stations may have changed. */
+	@Nullable
+	private Long2ObjectOpenHashMap<Station> stationsByBlockPos;
+
+	private static final int MAX_CACHED_STATION_POSITIONS = 16384;
+	private static final int MAX_CACHED_HORIZONTAL = 1 << 25;
+	private static final int MAX_CACHED_VERTICAL = 1 << 11;
 
 	private static MinecraftClientData instance = new MinecraftClientData();
 	private static MinecraftClientData dashboardInstance = new MinecraftClientData();
@@ -68,6 +75,8 @@ public final class MinecraftClientData extends ClientData {
 		}));
 
 		simplifiedRoutes.forEach(simplifiedRoute -> simplifiedRouteIdMap.put(simplifiedRoute.getId(), simplifiedRoute));
+		// Every client station update, addition and removal is followed by a full sync
+		stationsByBlockPos = null;
 	}
 
 	/** Vehicle/lift packets do not change the rail graph, routes, or spatial indexes. */
@@ -132,6 +141,41 @@ public final class MinecraftClientData extends ClientData {
 		} else {
 			return null;
 		}
+	}
+
+	/**
+	 * @return the first station, in iteration order, whose area contains the block position
+	 */
+	@Nullable
+	public Station findStation(int x, int y, int z) {
+		if (x < -MAX_CACHED_HORIZONTAL || x >= MAX_CACHED_HORIZONTAL || z < -MAX_CACHED_HORIZONTAL || z >= MAX_CACHED_HORIZONTAL || y < -MAX_CACHED_VERTICAL || y >= MAX_CACHED_VERTICAL) {
+			return findStationUncached(x, y, z);
+		}
+		final long key = ((long) (x & 0x3FFFFFF) << 38) | ((long) (z & 0x3FFFFFF) << 12) | (y & 0xFFF);
+		if (stationsByBlockPos == null) {
+			stationsByBlockPos = new Long2ObjectOpenHashMap<>();
+		}
+		final Station cachedStation = stationsByBlockPos.get(key);
+		if (cachedStation != null || stationsByBlockPos.containsKey(key)) {
+			return cachedStation;
+		}
+		if (stationsByBlockPos.size() >= MAX_CACHED_STATION_POSITIONS) {
+			stationsByBlockPos.clear();
+		}
+		final Station station = findStationUncached(x, y, z);
+		stationsByBlockPos.put(key, station);
+		return station;
+	}
+
+	@Nullable
+	private Station findStationUncached(int x, int y, int z) {
+		final Position position = new Position(x, y, z);
+		for (final Station station : stations) {
+			if (station.inArea(position)) {
+				return station;
+			}
+		}
+		return null;
 	}
 
 	public boolean getRouteIdHasDisabledAnnouncements(long routeId) {
