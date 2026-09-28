@@ -79,7 +79,7 @@ public final class WorkerThread extends CustomThread {
 		final int newRenderDistance = MinecraftClientHelper.getRenderDistance();
 		if (renderDistance != newRenderDistance) {
 			renderDistance = newRenderDistance;
-			occlusionCullingInstance = new OcclusionCullingInstance(Math.min(renderDistance, MAX_OCCLUSION_CHUNK_DISTANCE) * 16, new CullingDataProvider());
+			occlusionCullingInstance = new ReachLimitedOcclusionCullingInstance(Math.min(renderDistance, MAX_OCCLUSION_CHUNK_DISTANCE) * 16, new CullingDataProvider());
 		}
 	}
 
