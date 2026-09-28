@@ -4,7 +4,11 @@ import io.netty.buffer.ByteBuf;
 import io.netty.buffer.Unpooled;
 import org.junit.jupiter.api.Test;
 import org.mtr.libraries.com.google.gson.JsonArray;
+import org.mtr.libraries.com.google.gson.JsonElement;
+import org.mtr.libraries.com.google.gson.JsonNull;
 import org.mtr.libraries.com.google.gson.JsonObject;
+import org.mtr.libraries.com.google.gson.JsonPrimitive;
+import org.mtr.libraries.com.google.gson.internal.LazilyParsedNumber;
 import org.mtr.mapping.tool.PacketBufferReceiver;
 import org.mtr.mapping.tool.PacketBufferSender;
 
@@ -87,6 +91,60 @@ public final class PacketPayloadTest {
 		}
 		for (JsonObject json : new JsonObject[]{surrogate, deep}) {
 			receive(send(sender -> new PacketPayload(json).write(sender, true)), receiver -> assertEquals(json.toString(), receiver.readString()));
+		}
+	}
+
+	@Test
+	public void countedJsonLengthMatchesLegacyText() {
+		final Random random = new Random(48);
+		final String[] strings = {"", "abc", "\"quoted\" \\ back", "<html>&='", "\u0000\u001F\u007F\u2028\u2029", "한글漢字", "🚆🚉", "\uD800", "\uDC00x", "line\nbreak\ttab"};
+		for (int i = 0; i < 2000; i++) {
+			final JsonElement json = randomElement(random, 0);
+			assertEquals(json.toString().length(), PacketPayload.jsonLength(json), json.toString());
+		}
+		for (String string : strings) {
+			final JsonObject json = new JsonObject();
+			json.addProperty(string, string);
+			json.add("null", JsonNull.INSTANCE);
+			json.addProperty("nan", Double.NaN);
+			json.addProperty("infinity", Double.NEGATIVE_INFINITY);
+			json.addProperty("lazy", new LazilyParsedNumber("1.50e+3"));
+			assertEquals(json.toString().length(), PacketPayload.jsonLength(json), json.toString());
+		}
+		final JsonObject large = fixture(4000);
+		assertEquals(large.toString().length(), PacketPayload.jsonLength(large));
+	}
+
+	private static JsonElement randomElement(Random random, int depth) {
+		switch (depth > 4 ? random.nextInt(6) : random.nextInt(8)) {
+			case 0:
+				return JsonNull.INSTANCE;
+			case 1:
+				return new JsonPrimitive(random.nextBoolean());
+			case 2:
+				return new JsonPrimitive(random.nextLong());
+			case 3:
+				return new JsonPrimitive(Double.longBitsToDouble(random.nextLong()));
+			case 4:
+				return new JsonPrimitive(random.nextInt(1000) / 7.0F);
+			case 5:
+				final StringBuilder builder = new StringBuilder();
+				for (int i = random.nextInt(12); i > 0; i--) {
+					builder.append((char) (random.nextBoolean() ? random.nextInt(128) : random.nextInt(0x10000)));
+				}
+				return new JsonPrimitive(builder.toString());
+			case 6:
+				final JsonArray array = new JsonArray();
+				for (int i = random.nextInt(5); i > 0; i--) {
+					array.add(randomElement(random, depth + 1));
+				}
+				return array;
+			default:
+				final JsonObject object = new JsonObject();
+				for (int i = random.nextInt(5); i > 0; i--) {
+					object.add(randomElement(random, 5).toString() + i, randomElement(random, depth + 1));
+				}
+				return object;
 		}
 	}
 

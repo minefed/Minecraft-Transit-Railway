@@ -1,9 +1,16 @@
 package org.mtr.mod.packet;
 
 import org.mtr.core.tool.Utilities;
+import org.mtr.libraries.com.google.gson.JsonElement;
 import org.mtr.libraries.com.google.gson.JsonObject;
+import org.mtr.libraries.com.google.gson.Strictness;
+import org.mtr.libraries.com.google.gson.internal.Streams;
+import org.mtr.libraries.com.google.gson.stream.JsonWriter;
 import org.mtr.mapping.tool.PacketBufferReceiver;
 import org.mtr.mapping.tool.PacketBufferSender;
+
+import java.io.IOException;
+import java.io.Writer;
 
 /** Retains the legacy string framing unless this particular recipient negotiated version 1. */
 final class PacketPayload {
@@ -63,6 +70,24 @@ final class PacketPayload {
 		return text;
 	}
 
+	/** The length of {@link #text()} without building the string, which binary peers never receive. */
+	private long textLength() {
+		return text == null ? jsonLength(json) : text.length();
+	}
+
+	/** The UTF-16 length of {@link JsonElement#toString()}, produced by the same writer settings. */
+	static long jsonLength(JsonElement jsonElement) {
+		final CharCountingWriter writer = new CharCountingWriter();
+		final JsonWriter jsonWriter = new JsonWriter(writer);
+		jsonWriter.setStrictness(Strictness.LENIENT);
+		try {
+			Streams.write(jsonElement, jsonWriter);
+		} catch (IOException e) {
+			throw new AssertionError(e);
+		}
+		return writer.count;
+	}
+
 	void write(PacketBufferSender sender, boolean allowBinary) {
 		if (allowBinary && !prepared) {
 			prepared = true;
@@ -70,7 +95,7 @@ final class PacketPayload {
 				final byte[] encoded = BinaryPacketCodec.encode(json());
 				// Include the marker, length and possible final padding byte in the comparison.
 				// PacketBufferSender strings use an int length and UTF-16 chars.
-				if (encoded.length + (encoded.length & 1) + 14L < text().length() * 2L) {
+				if (encoded.length + (encoded.length & 1) + 14L < textLength() * 2L) {
 					binary = encoded;
 				}
 			} catch (IllegalArgumentException ignored) {
@@ -97,6 +122,34 @@ final class PacketPayload {
 				value |= binary[index++] & 0xFF;
 			}
 			sender.writeChar((char) value);
+		}
+	}
+
+	private static final class CharCountingWriter extends Writer {
+
+		private long count;
+
+		@Override
+		public void write(int character) {
+			count++;
+		}
+
+		@Override
+		public void write(char[] buffer, int offset, int length) {
+			count += length;
+		}
+
+		@Override
+		public void write(String string, int offset, int length) {
+			count += length;
+		}
+
+		@Override
+		public void flush() {
+		}
+
+		@Override
+		public void close() {
 		}
 	}
 }
