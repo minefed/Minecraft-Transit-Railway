@@ -41,6 +41,8 @@ public class VehicleExtension extends Vehicle implements Utilities {
 
 	public final PersistentVehicleData persistentVehicleData;
 
+	private static final SensorPowerRequests SENSOR_POWER_REQUESTS = new SensorPowerRequests();
+
 	public VehicleExtension(VehicleUpdate vehicleUpdate, Data data) {
 		super(vehicleUpdate.getVehicleExtraData(), null, new JsonReader(Utilities.getJsonObjectFromData(vehicleUpdate.getVehicle())), data);
 		final PersistentVehicleData tempPersistentVehicleData = MinecraftClientData.getInstance().vehicleIdToPersistentVehicleData.get(getId());
@@ -219,7 +221,9 @@ public class VehicleExtension extends Vehicle implements Utilities {
 					}
 					if (BlockTrainSensorBase.matchesFilter(new World(clientWorld.data), offsetBlockPos, thisRouteId, speed)) {
 						if (block.data instanceof BlockTrainRedstoneSensor && IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED) < 2) {
-							InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
+							if (SENSOR_POWER_REQUESTS.shouldSend(clientWorld.data, offsetBlockPos.asLong(), IBlock.getStatePropertySafe(blockState, BlockTrainRedstoneSensor.POWERED), System.nanoTime() / 1_000_000)) {
+								InitClient.REGISTRY_CLIENT.sendPacketToServer(new PacketTurnOnBlockEntity(offsetBlockPos));
+							}
 						} else if (block.data instanceof BlockTrainAnnouncer && VehicleRidingMovement.isRiding(id)) {
 							final BlockEntity blockEntity = clientWorld.getBlockEntity(offsetBlockPos);
 							if (blockEntity != null && blockEntity.data instanceof BlockTrainAnnouncer.BlockEntity) {
