@@ -16,6 +16,8 @@
 		"RawModelBoundsMixin",
 		"OptimizedModelBoundsMixin",
 		"WorldChunkDoorScanMixin",
+		"VertexAttributeStateMixin",
+		"MaterialPropertiesMixin",
 		"ClientWorldRenderingMixin",
 		"PlayerRendererOffsetMixin"
 	],

@@ -5,10 +5,13 @@ import org.mtr.libraries.com.google.gson.JsonElement;
 import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.libraries.com.google.gson.JsonParser;
 import org.objectweb.asm.ClassReader;
+import org.objectweb.asm.Opcodes;
 import org.objectweb.asm.tree.AbstractInsnNode;
 import org.objectweb.asm.tree.AnnotationNode;
 import org.objectweb.asm.tree.ClassNode;
+import org.objectweb.asm.tree.FieldInsnNode;
 import org.objectweb.asm.tree.FieldNode;
+import org.objectweb.asm.tree.IntInsnNode;
 import org.objectweb.asm.tree.MethodInsnNode;
 import org.objectweb.asm.tree.MethodNode;
 
@@ -100,6 +103,62 @@ public final class MixinCompatibilityTest {
 		assertNotNull(mappings, "The door scan hooks must be remapped");
 		assertEquals("Lnet/minecraft/class_2818;method_12010(Lnet/minecraft/class_2338;Lnet/minecraft/class_2680;Z)Lnet/minecraft/class_2680;", mappings.get("setBlockState").getAsString());
 		assertEquals("Lnet/minecraft/class_2818;method_12224(Lnet/minecraft/class_2540;Lnet/minecraft/class_2487;Ljava/util/function/Consumer;)V", mappings.get("loadFromPacket").getAsString());
+	}
+
+	@Test
+	public void optimizedRendererAllocationHooksMatchBundledMappings() throws IOException {
+		final String stateMixin = "org/mtr/mixin/VertexAttributeStateMixin";
+		final String materialMixin = "org/mtr/mixin/MaterialPropertiesMixin";
+		assertTrue(configuredMixins("client").contains(stateMixin));
+		assertTrue(configuredMixins("client").contains(materialMixin));
+
+		// Each redirect must match exactly one call so that no other buffer or array is replaced.
+		final List<String> redirectTargets = new ArrayList<>();
+		for (MethodNode handler : readClass(stateMixin).methods) {
+			final AnnotationNode redirect = annotation(handler, REDIRECT);
+			if (redirect != null) {
+				assertEquals(List.of("apply"), stringValues(redirect, "method"));
+				redirectTargets.add((String) value((AnnotationNode) value(redirect, "at"), "target"));
+			}
+		}
+		assertEquals(List.of(
+				"Lorg/mtr/mapping/render/vertex/VertexAttributeType;values()[Lorg/mtr/mapping/render/vertex/VertexAttributeType;",
+				"Ljava/nio/ByteBuffer;allocate(I)Ljava/nio/ByteBuffer;",
+				"Ljava/nio/ByteBuffer;asFloatBuffer()Ljava/nio/FloatBuffer;"
+		), redirectTargets);
+		final List<String> calls = new ArrayList<>();
+		for (AbstractInsnNode instruction : method(readClass("org/mtr/mapping/render/vertex/VertexAttributeState"), "apply", "()V").instructions) {
+			if (instruction instanceof MethodInsnNode) {
+				final MethodInsnNode invocation = (MethodInsnNode) instruction;
+				calls.add("L" + invocation.owner + ";" + invocation.name + invocation.desc);
+			}
+		}
+		for (String target : redirectTargets) {
+			assertEquals(1, calls.stream().filter(target::equals).count(), target);
+		}
+		assertTrue(calls.contains("Lorg/mtr/mapping/render/tool/Utilities;store(Lorg/mtr/mapping/holder/Matrix4f;Ljava/nio/FloatBuffer;)V"));
+		final List<Integer> matrixReads = new ArrayList<>();
+		final List<Integer> constants = new ArrayList<>();
+		for (AbstractInsnNode instruction : method(readClass("org/mtr/mapping/render/vertex/VertexAttributeState"), "apply", "()V").instructions) {
+			if (instruction instanceof IntInsnNode) {
+				constants.add(((IntInsnNode) instruction).operand);
+			} else if (instruction.getOpcode() >= Opcodes.ICONST_0 && instruction.getOpcode() <= Opcodes.ICONST_5) {
+				constants.add(instruction.getOpcode() - Opcodes.ICONST_0);
+			} else if (instruction instanceof MethodInsnNode && ((MethodInsnNode) instruction).owner.equals("java/nio/FloatBuffer")) {
+				assertEquals("get", ((MethodInsnNode) instruction).name, "The matrix buffer must only be read by absolute index");
+				assertEquals("(I)F", ((MethodInsnNode) instruction).desc);
+				matrixReads.add(constants.get(constants.size() - 1));
+			} else if (instruction instanceof MethodInsnNode && ((MethodInsnNode) instruction).name.equals("allocate")) {
+				assertEquals(64, constants.get(constants.size() - 1));
+			}
+		}
+		assertEquals(List.of(0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15), matrixReads);
+
+		// The overwritten hashes must use the same fields in the same order as Objects.hash in the bundled classes.
+		assertEquals(List.of("position", "color", "textureU", "textureV", "lightmapUV", "normal", "overlayUV", "matrix4f"), hashedFields("org/mtr/mapping/render/vertex/VertexAttributeState"));
+		assertEquals(List.of("shaderType", "texture", "vertexAttributeState", "translucent", "writeDepthBuf", "cutoutHack"), hashedFields("org/mtr/mapping/render/batch/MaterialProperties"));
+		assertEquals(hashedFields("org/mtr/mapping/render/vertex/VertexAttributeState"), hashedFields(stateMixin));
+		assertEquals(hashedFields("org/mtr/mapping/render/batch/MaterialProperties"), hashedFields(materialMixin));
 	}
 
 	@Test
@@ -228,6 +287,27 @@ public final class MixinCompatibilityTest {
 			}
 		}
 		return null;
+	}
+
+	private static MethodNode method(ClassNode classNode, String name, String descriptor) {
+		for (MethodNode method : classNode.methods) {
+			if (method.name.equals(name) && method.desc.equals(descriptor)) {
+				return method;
+			}
+		}
+		fail(classNode.name + "." + name + descriptor + " is missing");
+		return null;
+	}
+
+	/** Fields read by {@code hashCode()}, in order. */
+	private static List<String> hashedFields(String className) throws IOException {
+		final List<String> result = new ArrayList<>();
+		for (AbstractInsnNode instruction : method(readClass(className), "hashCode", "()I").instructions) {
+			if (instruction instanceof FieldInsnNode && instruction.getOpcode() == Opcodes.GETFIELD) {
+				result.add(((FieldInsnNode) instruction).name);
+			}
+		}
+		return result;
 	}
 
 	private static List<String> stringValues(AnnotationNode annotation, String key) {
