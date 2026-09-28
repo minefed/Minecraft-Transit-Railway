@@ -112,6 +112,92 @@ boarding, manual controls, sensors, signals, PIDS language/page transitions,
 lighting, resource reloads, and mixed-version connections. Unit tests do not
 replace those in-game measurements.
 
+## Door, occlusion and packet work (2026-09-28)
+
+These changes remove repeated work only. Rendering, door behavior, culling
+results, network bytes and server state are unchanged.
+
+- **Door platform scan.** `canOpenDoors` scanned every cell around each open
+  doorway of each stopped vehicle and lift on every frame, including shadow
+  passes. `DoorScanCache` stores whether a platform or unlocked PSD/APG was
+  found and the unlocked door cells, keyed by the exact floored cells visited by
+  the original `double` loops. An entry is reused only while every chunk column
+  it read is the same chunk object with the same door-scan epoch. The
+  client-only `WorldChunkDoorScanMixin` bumps that epoch when a
+  platform/PSD/APG block is placed, removed or changed, and when a chunk is
+  reloaded from a packet. Unloaded or out-of-radius columns resolve to a
+  different chunk object. Door values are still applied every call, to block
+  entities looked up again. Ranges above 64 cells per axis and untracked
+  chunks use the original loop. The LRU keeps 1,024 entries and is cleared on
+  data reset, world change and disconnect.
+- **Occlusion cache reset.** The worker reset its whole occlusion cache on
+  every cycle (13.5 MiB at render distance 12, 256 MiB from 32).
+  `DirtyBlockOcclusionCache` keeps the library's byte layout, index arithmetic
+  and exceptions, marks 64-byte blocks that become non-zero, and zeroes only
+  those. `ReachLimitedOcclusionCullingInstance` returns `false` directly for
+  boxes whose cells all lie outside the cache cube, after the camera-inside
+  check. The library marks each such cell skipped, because its cache lookup
+  returns -1, and returns `false` without casting rays. Unsorted, oversized or
+  near-overflow boxes still use the library.
+- **Occlusion task lists.** Rails, vehicles and lifts do not build culling
+  lambdas when the two-slot queue is already full. The offer would be dropped.
+  If the worker polls between the check and the offer, that frame behaves as
+  if it had polled just after the offer, which the original timing allowed.
+- **Optimized renderer.** Mixins reuse the `VertexAttributeType` array and a
+  per-thread 64-byte matrix buffer in `VertexAttributeState.apply()`, and
+  compute the `Objects.hash` values of `VertexAttributeState` and
+  `MaterialProperties` without varargs arrays. GL calls, their order and
+  arguments are unchanged. Per-frame batch lists and VAO rebinding were left
+  unchanged: pooling can change `HashMap` iteration order, and skipping binds
+  changes the GL call sequence.
+- **Station lookups.** `findStation` results are cached per block position in
+  the client data instance, including misses. Core applies every station
+  update, addition and removal before `sync()`, which clears the cache. The
+  first matching station in iteration order is still returned. The railway
+  sign route name separator is a precompiled `Pattern` with identical
+  `split` semantics.
+- **Sensor requests.** The client resent `PacketTurnOnBlockEntity` on every
+  frame until the sensor's powered state arrived. The server's `power()` only
+  raises the level to 2, so repeats were no-ops. A request for the same sensor
+  is now sent again only when the observed power level changes or after
+  250 ms.
+- **Server vehicle updates.** `VehicleExtraData.copy` no longer builds the
+  detached copy of the whole path that only became the copy's unused
+  `immutablePath`. Its only caller serializes the copy from `path`. For binary
+  peers, `PacketPayload` counts the characters of the legacy JSON with the same
+  lenient `JsonWriter` instead of building the string only for a size check.
+- **Not changed.** One `VehicleUpdate` object is still built for each client.
+  Sharing it requires showing that no recipient-specific state or mutation can
+  reach it.
+
+Validation on 2026-09-28, Minecraft 1.20.4 Fabric with Java 17 bytecode:
+
+- `DoorScanCacheTest` compares cached and uncached scans over 200,000 random
+  steps with block edits, chunk unloads, reloads and replacements. It also
+  checks the visited cells against the original loop and Minecraft's `floor`.
+- `OcclusionCullingEquivalenceTest` compares every byte and exception with
+  `ArrayOcclusionCache` and compares 180,000 random culling queries with the
+  library instance.
+- `MinecraftClientDataSyncTest`, `SensorPowerRequestsTest` and
+  `PacketPayloadTest` cover station lookups across syncs, sensor request
+  suppression and counted JSON lengths.
+- `MixinCompatibilityTest` checks the new mixin registrations, refmap entries,
+  bundled call sites, `hashCode` field order, and the single `copy` caller.
+
+The regression command above passed all 68 selected tests, and
+`:fabric:verifyRailRendering :fabric:verifyMixinCompatibility` passed against
+the remapped JAR. Compared with the pre-change JAR, only MTR classes, the mixin
+config and the refmap changed; bundled Core, Mappings and library classes are
+identical. In a temporary Fabric Loader 0.18.4 JUnit/Knot run (MixinExtras
+0.5.0), all mixins applied and a full Mixin audit passed. ForgeGradle could not
+set up Forge here because its MCP step requires a Java 17 toolchain; the Forge
+sources were instead compiled with `javac --release 17` against the Mojang-named
+1.20.4 game and the Forge Mappings JAR.
+
+A synthetic reset benchmark measured 0.6-1.7 ms for the full 13.5 MiB reset
+and 0.08-0.30 ms after 20,000-200,000 touched cells. At the 256 MiB limit it
+measured 39 ms versus 2.7 ms. These are not in-game FPS measurements.
+
 ## Fabric Mixin compatibility
 
 The Fabric build pins `fabricLoaderVersion=0.18.4` in `gradle.properties`.
