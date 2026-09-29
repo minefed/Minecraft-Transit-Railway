@@ -242,6 +242,8 @@ forge/src/main/java/org/mtr/mixin/*
 !fabric/src/main/java/org/mtr/mixin/VertexBufferAccessor.java
 !fabric/src/main/java/org/mtr/mixin/VertexArrayReleaseMixin.java
 !fabric/src/main/java/org/mtr/mixin/OptimizedRendererAccessor.java
+!fabric/src/main/java/org/mtr/mixin/ShaderManagerTextureUseMixin.java
+!fabric/src/main/java/org/mtr/mixin/TextureManagerIdleModelTextureMixin.java
 !forge/src/main/java/org/mtr/mixin/PathDataAccessor.java
 !forge/src/main/java/org/mtr/mixin/GraphicsHolderRailMatrixMixin.java
 !forge/src/main/java/org/mtr/mixin/RawModelBoundsMixin.java

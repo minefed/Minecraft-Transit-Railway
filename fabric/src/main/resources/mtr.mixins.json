@@ -19,6 +19,8 @@
 		"VertexBufferAccessor",
 		"VertexArrayReleaseMixin",
 		"OptimizedRendererAccessor",
+		"ShaderManagerTextureUseMixin",
+		"TextureManagerIdleModelTextureMixin",
 		"WorldChunkDoorScanMixin",
 		"VertexAttributeStateMixin",
 		"MaterialPropertiesMixin",
