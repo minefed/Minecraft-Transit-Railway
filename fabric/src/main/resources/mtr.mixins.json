@@ -16,6 +16,8 @@
 		"GraphicsHolderRailMatrixMixin",
 		"RawModelBoundsMixin",
 		"OptimizedModelBoundsMixin",
+		"VertexBufferAccessor",
+		"VertexArrayReleaseMixin",
 		"WorldChunkDoorScanMixin",
 		"VertexAttributeStateMixin",
 		"MaterialPropertiesMixin",

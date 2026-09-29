@@ -239,6 +239,8 @@ forge/src/main/java/org/mtr/mixin/*
 !fabric/src/main/java/org/mtr/mixin/WorldChunkDoorScanMixin.java
 !fabric/src/main/java/org/mtr/mixin/VertexAttributeStateMixin.java
 !fabric/src/main/java/org/mtr/mixin/MaterialPropertiesMixin.java
+!fabric/src/main/java/org/mtr/mixin/VertexBufferAccessor.java
+!fabric/src/main/java/org/mtr/mixin/VertexArrayReleaseMixin.java
 !forge/src/main/java/org/mtr/mixin/PathDataAccessor.java
 !forge/src/main/java/org/mtr/mixin/GraphicsHolderRailMatrixMixin.java
 !forge/src/main/java/org/mtr/mixin/RawModelBoundsMixin.java
