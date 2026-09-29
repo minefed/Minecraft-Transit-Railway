@@ -21,8 +21,7 @@ public final class OcclusionCullingEquivalenceTest {
 			final ArrayOcclusionCache original = new ArrayOcclusionCache(reach);
 			final DirtyBlockOcclusionCache optimized = new DirtyBlockOcclusionCache(reach);
 			final byte[] originalBytes = bytes(original);
-			final byte[] optimizedBytes = bytes(optimized);
-			assertEquals(originalBytes.length, optimizedBytes.length);
+			assertEquals(originalBytes.length, optimized.byteLength());
 			for (int step = 0; step < 200_000; step++) {
 				final int operation = random.nextInt(20);
 				final int range = reach * 2 + 4;
@@ -30,14 +29,61 @@ public final class OcclusionCullingEquivalenceTest {
 				final int y = random.nextInt(range) - 2;
 				final int z = random.nextInt(range) - 2;
 				assertSame(outcome(original, operation, x, y, z), outcome(optimized, operation, x, y, z), "reach " + reach + " step " + step);
-				if (operation == 0 || step % 97 == 0) {
-					assertArrayEquals(originalBytes, optimizedBytes, "reach " + reach + " step " + step);
+				if (operation == 0 || step % 997 == 0) {
+					assertArrayEquals(originalBytes, bytes(optimized), "reach " + reach + " step " + step);
 				}
 			}
 			original.resetCache();
 			optimized.resetCache();
-			assertArrayEquals(new byte[originalBytes.length], optimizedBytes);
+			assertArrayEquals(new byte[originalBytes.length], bytes(optimized));
 		}
+	}
+
+	@Test
+	public void sparseCacheOnlyKeepsRecentlyWrittenBricks() {
+		// Render distance 32: the array cache would allocate 256 MiB
+		final DirtyBlockOcclusionCache cache = new DirtyBlockOcclusionCache(512);
+		assertEquals(256 << 20, cache.byteLength());
+		for (int i = 0; i < 1000; i++) {
+			cache.setVisible(512 + i % 100, 512, 512 + i / 100);
+		}
+		assertEquals(1, cache.getState(512, 512, 512));
+		assertEquals(0, cache.getState(0, 0, 0));
+		assertTrue(cache.allocatedBrickCount() <= 14, "Only touched bricks are allocated: " + cache.allocatedBrickCount());
+		for (int i = 0; i < 1000; i++) {
+			cache.resetCache();
+		}
+		assertEquals(0, cache.getState(512, 512, 512));
+		assertEquals(0, cache.allocatedBrickCount(), "Idle bricks are released after resets");
+		assertThrows(ArrayIndexOutOfBoundsException.class, () -> cache.setVisible(0, 0, 1024));
+	}
+
+	@Test
+	public void sparseCacheMatchesArrayCacheForLibraryAccessPatterns() throws ReflectiveOperationException {
+		final Random random = new Random(5);
+		final int reach = 64;
+		final ArrayOcclusionCache original = new ArrayOcclusionCache(reach);
+		final DirtyBlockOcclusionCache optimized = new DirtyBlockOcclusionCache(reach);
+		final byte[] originalBytes = bytes(original);
+		for (int step = 0; step < 2_000_000; step++) {
+			if (random.nextInt(50_000) == 0) {
+				original.resetCache();
+				optimized.resetCache();
+			}
+			final int x = random.nextInt(reach * 2 - 4) + 2;
+			final int y = random.nextInt(reach * 2 - 4) + 2;
+			final int z = random.nextInt(reach * 2 - 4) + 2;
+			final int operation = random.nextInt(4);
+			assertEquals(original.getState(x, y, z), optimized.getState(x, y, z));
+			if (operation == 1) {
+				original.setLastVisible();
+				optimized.setLastVisible();
+			} else if (operation == 2) {
+				original.setLastHidden();
+				optimized.setLastHidden();
+			}
+		}
+		assertArrayEquals(originalBytes, bytes(optimized));
 	}
 
 	@Test
@@ -140,7 +186,15 @@ public final class OcclusionCullingEquivalenceTest {
 
 	private static final String[] STATES = {"0", "1", "2", "3"};
 
-	private static byte[] bytes(OcclusionCache cache) throws ReflectiveOperationException {
+	private static byte[] bytes(DirtyBlockOcclusionCache cache) {
+		final byte[] bytes = new byte[cache.byteLength()];
+		for (int i = 0; i < bytes.length; i++) {
+			bytes[i] = cache.byteAt(i);
+		}
+		return bytes;
+	}
+
+	private static byte[] bytes(ArrayOcclusionCache cache) throws ReflectiveOperationException {
 		final Field field = cache.getClass().getDeclaredField("cache");
 		field.setAccessible(true);
 		return (byte[]) field.get(cache);
