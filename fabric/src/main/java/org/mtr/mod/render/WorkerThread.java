@@ -29,12 +29,24 @@ public final class WorkerThread extends CustomThread {
 	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueMisc = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
 	private final ArrayBlockingQueue<Consumer<OcclusionCullingInstance>> occlusionQueueRail = new ArrayBlockingQueue<>(MAX_QUEUE_SIZE);
 	private final Queue<Runnable> dynamicTextureQueue = new ConcurrentLinkedQueue<>();
+	private volatile boolean releaseOcclusionCache;
 
 	@Override
 	protected void runTick() {
 		try {
 			Thread.sleep(10); // Give the CPU a little break
 		} catch (InterruptedException e) {
+		}
+
+		if (releaseOcclusionCache) {
+			// Drop the cache after leaving a world; it is recreated at the same size when the next culling task arrives
+			releaseOcclusionCache = false;
+			occlusionQueueVehicle.clear();
+			occlusionQueueLift.clear();
+			occlusionQueueMisc.clear();
+			occlusionQueueRail.clear();
+			occlusionCullingInstance = null;
+			renderDistance = -1;
 		}
 
 		if (!occlusionQueueVehicle.isEmpty() || !occlusionQueueLift.isEmpty() || !occlusionQueueMisc.isEmpty() || !occlusionQueueRail.isEmpty()) {
@@ -85,6 +97,13 @@ public final class WorkerThread extends CustomThread {
 
 	public boolean canScheduleMTRRails() {
 		return occlusionQueueRail.remainingCapacity() > 0;
+	}
+
+	/**
+	 * Frees the occlusion cache (up to 256 MiB at render distance 32) on the worker thread.
+	 */
+	public void releaseOcclusionCache() {
+		releaseOcclusionCache = true;
 	}
 
 	public void scheduleDynamicTextures(Runnable runnable) {

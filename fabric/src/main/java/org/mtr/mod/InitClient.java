@@ -401,6 +401,7 @@ public final class InitClient {
 			RenderRails.clearModelCache();
 			RenderVehicleHelper.clearDoorScanCache();
 			DynamicTextureCache.instance.destroyAll();
+			MainRenderer.WORKER_THREAD.releaseOcclusionCache();
 			PacketCodecCapabilities.resetClient();
 			PacketFetchArrivals.clearCallbacks();
 			PacketCheckRouteIdHasDisabledAnnouncements.clearCallbacks();
