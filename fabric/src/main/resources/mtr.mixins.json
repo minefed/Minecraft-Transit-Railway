@@ -18,6 +18,7 @@
 		"OptimizedModelBoundsMixin",
 		"VertexBufferAccessor",
 		"VertexArrayReleaseMixin",
+		"OptimizedRendererAccessor",
 		"WorldChunkDoorScanMixin",
 		"VertexAttributeStateMixin",
 		"MaterialPropertiesMixin",

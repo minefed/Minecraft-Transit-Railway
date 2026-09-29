@@ -77,6 +77,7 @@ public class CustomResourceLoader {
 	}
 
 	public static void reload() {
+		OptimizedRendererWrapper.invalidateShaders();
 		RenderRails.clearModelCache();
 		RenderLifts.clearModelCache();
 		RenderPIDS.clearTextWidthCache();
