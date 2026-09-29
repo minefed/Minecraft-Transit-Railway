@@ -244,6 +244,8 @@ forge/src/main/java/org/mtr/mixin/*
 !fabric/src/main/java/org/mtr/mixin/OptimizedRendererAccessor.java
 !fabric/src/main/java/org/mtr/mixin/ShaderManagerTextureUseMixin.java
 !fabric/src/main/java/org/mtr/mixin/TextureManagerIdleModelTextureMixin.java
+!fabric/src/main/java/org/mtr/mixin/FontManagerMtrFontMixin.java
+!fabric/src/main/java/org/mtr/mixin/ConfigScreenFontReloadMixin.java
 !forge/src/main/java/org/mtr/mixin/PathDataAccessor.java
 !forge/src/main/java/org/mtr/mixin/GraphicsHolderRailMatrixMixin.java
 !forge/src/main/java/org/mtr/mixin/RawModelBoundsMixin.java

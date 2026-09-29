@@ -20,6 +20,8 @@
 		"VertexArrayReleaseMixin",
 		"OptimizedRendererAccessor",
 		"ShaderManagerTextureUseMixin",
+		"FontManagerMtrFontMixin",
+		"ConfigScreenFontReloadMixin",
 		"TextureManagerIdleModelTextureMixin",
 		"WorldChunkDoorScanMixin",
 		"VertexAttributeStateMixin",
