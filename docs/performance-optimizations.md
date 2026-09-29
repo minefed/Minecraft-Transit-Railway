@@ -198,6 +198,56 @@ A synthetic reset benchmark measured 0.6-1.7 ms for the full 13.5 MiB reset
 and 0.08-0.30 ms after 20,000-200,000 touched cells. At the 256 MiB limit it
 measured 39 ms versus 2.7 ms. These are not in-game FPS measurements.
 
+## Client memory and GPU work (2026-09-29)
+
+These changes reduce client RAM, native memory and VRAM. The first group only
+frees objects that can no longer be drawn; the second group changes quality or
+timing and is listed with its visible effect.
+
+Leaks fixed without visible change:
+
+- **Model GPU buffers.** The bundled `VertexArray` kept only the index buffer of
+  its `Mesh` and deleted only the vertex array, and nothing called it. Every
+  model rebuild (60 s cache expiry, resource reload) leaked a VAO, VBO and IBO.
+  `VertexArrayReleaseMixin` registers the three names with a `Cleaner` guarded by
+  the index buffer object that every part and copy references; once it is
+  unreachable, `GlBufferReclaimer` deletes them on the render thread.
+- **Model shaders.** `OptimizedRendererWrapper.beginReload` recompiles the three
+  shader programs only after a resource reload (or while compilation fails)
+  instead of for every model build, and otherwise captures the GL state as before.
+- **Dynamic textures.** Leaving a world destroys every texture of
+  `DynamicTextureCache`, including those waiting for delayed deletion. Cropped
+  originals and the RAM copy of uploaded textures are closed, and destroyed
+  texture names are reused so vanilla render layer caches stay bounded.
+- **Occlusion cache.** It is freed when leaving a world, and
+  `DirtyBlockOcclusionCache` stores the same bytes in 16x16x16-cell bricks that
+  are allocated on first write and released after 256 idle resets. Every
+  operation, byte and exception matches `ArrayOcclusionCache`; at render distance
+  32 the previous array was 256 MiB.
+
+Changes with a visible or timing effect:
+
+- Model textures bound by the optimized renderer that were not drawn for
+  5 minutes are destroyed if they are plain resource textures, and are loaded
+  again when next drawn (short hitch).
+- The TrueType files of the `mtr:mtr` font (28 MB CJK) load only while
+  "Use MTR Font" is enabled; closing the config screen reloads resources when
+  the option changes.
+- New configurations default `dynamicTextureResolution` to 1 (softer text,
+  about a quarter of the dynamic texture memory).
+- Code-drawn PSD, APG and lift door textures moved from `textures/block` to
+  `textures/door`, so they are not stitched into the block atlas; the four
+  models that used them as particle textures use small copies.
+- The escalator animations use 160x160 frames instead of 320x320, and the
+  4096x4096 A320 and 3024x3024 S700 textures were halved.
+
+Validation: `:fabric:test` (71 tests, including byte-for-byte comparisons of
+the sparse occlusion cache with the library cache), `:fabric:verifyRailRendering`
+and `:fabric:verifyMixinCompatibility` passed. In a Fabric Loader 0.18.4 Knot
+run with the whole Minefed client pack, `MixinEnvironment.audit()` passed and
+all seven new mixins were applied. The game was not started, so the effect on
+memory was not measured in game.
+
 ## Fabric Mixin compatibility
 
 The Fabric build pins `fabricLoaderVersion=0.18.4` in `gradle.properties`.
