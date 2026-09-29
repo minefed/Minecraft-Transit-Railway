@@ -25,7 +25,7 @@
 		},
 		"dynamicTextureResolution": {
 			"type": "integer",
-			"default": 2
+			"default": 1
 		},
 		"defaultRail3D": {
 			"type": "boolean",
