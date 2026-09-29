@@ -13,6 +13,7 @@ import org.mtr.mod.config.LanguageDisplay;
 import org.mtr.mod.data.IGui;
 import org.mtr.mod.render.MainRenderer;
 import org.mtr.mod.render.MoreRenderLayers;
+import com.mojang.blaze3d.systems.RenderSystem;
 
 import javax.annotation.Nullable;
 import java.awt.*;
@@ -34,6 +35,15 @@ public class DynamicTextureCache implements IGui {
 	private final ObjectOpenHashSet<String> generatingResources = new ObjectOpenHashSet<>();
 	private final MessageQueue<Runnable> resourceRegistryQueue = new MessageQueue<>();
 	private final Object2LongArrayMap<Identifier> deletedResources = new Object2LongArrayMap<>();
+	private volatile boolean destroyed;
+
+	/**
+	 * Names of destroyed textures. Vanilla render layer caches keep every texture identifier they have seen,
+	 * so reusing destroyed names instead of generating new random ones keeps those caches bounded.
+	 * A name is only reused after its texture was destroyed, and textures are looked up by name when drawn.
+	 */
+	private static final ObjectArrayList<Identifier> FREE_IDENTIFIERS = new ObjectArrayList<>();
+	private static int nextIdentifier;
 
 	public static DynamicTextureCache instance = new DynamicTextureCache();
 
@@ -77,11 +87,37 @@ public class DynamicTextureCache implements IGui {
 		final ObjectArrayList<Identifier> deletedResourcesToRemove = new ObjectArrayList<>();
 		deletedResources.forEach((identifier, expiryTime) -> {
 			if (expiryTime < currentTimeMillis) {
-				MinecraftClient.getInstance().getTextureManager().destroyTexture(identifier);
+				destroyTexture(identifier);
 				deletedResourcesToRemove.add(identifier);
 			}
 		});
 		deletedResourcesToRemove.forEach(deletedResources::removeLong);
+	}
+
+	/**
+	 * Releases every texture of this cache, including textures waiting for their delayed deletion.
+	 * Called when leaving a world, because the next join replaces this instance and nothing would tick it again.
+	 */
+	public void destroyAll() {
+		destroyed = true;
+		resourceRegistryQueue.process(Runnable::run);
+		dynamicResources.forEach((key, dynamicResource) -> {
+			dynamicResource.remove();
+			destroyTexture(dynamicResource.identifier);
+		});
+		dynamicResources.clear();
+		deletedResources.forEach((identifier, expiryTime) -> destroyTexture(identifier));
+		deletedResources.clear();
+		generatingResources.clear();
+	}
+
+	private static void destroyTexture(Identifier identifier) {
+		MinecraftClient.getInstance().getTextureManager().destroyTexture(identifier);
+		FREE_IDENTIFIERS.add(identifier);
+	}
+
+	private static Identifier nextIdentifier() {
+		return FREE_IDENTIFIERS.isEmpty() ? new Identifier(Init.MOD_ID, "id_" + Init.randomString() + "_" + nextIdentifier++) : FREE_IDENTIFIERS.remove(FREE_IDENTIFIERS.size() - 1);
 	}
 
 	public DynamicResource getPixelatedText(String text, int textColor, int maxWidth, double cjkSizeRatio, boolean fullPixel) {
@@ -267,6 +303,13 @@ public class DynamicTextureCache implements IGui {
 			final NativeImage nativeImage = supplier.get();
 
 			resourceRegistryQueue.put(() -> {
+				if (destroyed) {
+					if (nativeImage != null) {
+						nativeImage.close();
+					}
+					return;
+				}
+
 				final DynamicResource staticTextureProviderOld = dynamicResources.get(key);
 				if (staticTextureProviderOld != null) {
 					staticTextureProviderOld.remove();
@@ -284,15 +327,22 @@ public class DynamicTextureCache implements IGui {
 								newNativeImage.setPixelColor(x, y, nativeImage.getColor(x, y));
 							}
 						}
+						// The cropped copy replaces the original image, which was never closed before
+						nativeImage.close();
 					} else {
 						newNativeImage = nativeImage;
 					}
 
 					final NativeImageBackedTexture nativeImageBackedTexture = new NativeImageBackedTexture(newNativeImage);
-					final Identifier identifier = new Identifier(Init.MOD_ID, "id_" + Init.randomString());
+					final Identifier identifier = nextIdentifier();
 					MinecraftClient.getInstance().getTextureManager().registerTexture(identifier, new AbstractTexture(nativeImageBackedTexture.data));
 					dynamicResourceNew = new DynamicResource(identifier, nativeImageBackedTexture);
 					dynamicResources.put(key, dynamicResourceNew);
+					// The texture was uploaded when it was created on this (render) thread and is never uploaded again,
+					// so the RAM copy is not needed. Closing an image twice is safe when the texture is destroyed later.
+					if (RenderSystem.isOnRenderThread()) {
+						newNativeImage.close();
+					}
 				}
 
 				generatingResources.remove(key);

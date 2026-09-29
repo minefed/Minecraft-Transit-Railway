@@ -370,6 +370,8 @@ public final class InitClient {
 		REGISTRY_CLIENT.eventRegistryClient.registerClientJoin(() -> {
 			PacketCodecCapabilities.resetClient();
 			MinecraftClientData.reset();
+			// Release textures of the previous instance, in case no disconnect event was received for it
+			DynamicTextureCache.instance.destroyAll();
 			DynamicTextureCache.instance = new DynamicTextureCache();
 			lastMillis = System.currentTimeMillis();
 			gameMillis = 0;
@@ -398,6 +400,7 @@ public final class InitClient {
 		REGISTRY_CLIENT.eventRegistryClient.registerClientDisconnect(() -> {
 			RenderRails.clearModelCache();
 			RenderVehicleHelper.clearDoorScanCache();
+			DynamicTextureCache.instance.destroyAll();
 			PacketCodecCapabilities.resetClient();
 			PacketFetchArrivals.clearCallbacks();
 			PacketCheckRouteIdHasDisabledAnnouncements.clearCallbacks();
