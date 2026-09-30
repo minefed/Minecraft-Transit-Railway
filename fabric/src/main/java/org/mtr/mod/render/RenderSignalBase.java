@@ -145,17 +145,27 @@ public abstract class RenderSignalBase<T extends BlockSignalBase.BlockEntityBase
 
 	@Nullable
 	private static BlockPos getNodePos(ClientWorld world, BlockPos pos, Direction facing) {
+		final Direction sideways = facing.rotateYClockwise();
+		final Vector3i center = new Vector3i(pos.data);
 		int closestDistance = Integer.MAX_VALUE;
 		BlockPos closestPos = null;
 		for (int z = -4; z <= 4; z++) {
 			for (int x = -4; x <= 4; x++) {
 				for (int y = -5; y <= 5; y++) {
-					final BlockPos checkPos = pos.up(y).offset(facing.rotateYClockwise(), x).offset(facing, z);
+					// Keep the original int additions (including overflow) and an immutable
+					// position for every world read, without the two intermediate holders.
+					final BlockPos checkPos = new BlockPos(
+							pos.getX() + sideways.getOffsetX() * x + facing.getOffsetX() * z,
+							pos.getY() + y,
+							pos.getZ() + sideways.getOffsetZ() * x + facing.getOffsetZ() * z
+					);
 					final BlockState checkState = world.getBlockState(checkPos);
-					final int distance = checkPos.getManhattanDistance(new Vector3i(pos.data));
-					if (checkState.getBlock().data instanceof BlockNode && distance < closestDistance) {
-						closestDistance = distance;
-						closestPos = checkPos;
+					if (checkState.getBlock().data instanceof BlockNode) {
+						final int distance = checkPos.getManhattanDistance(center);
+						if (distance < closestDistance) {
+							closestDistance = distance;
+							closestPos = checkPos;
+						}
 					}
 				}
 			}

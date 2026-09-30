@@ -26,6 +26,7 @@ dependencies {
 	shadowImplementation "org.mtr:Minecraft-Mappings-fabric-${minecraftVersion}:0.0.1-dev"
 	testImplementation "org.junit.jupiter:junit-jupiter-api:5.+"
 	testImplementation "org.junit.platform:junit-platform-launcher:1.+"
+	testImplementation "org.mockito:mockito-core:5.18.0"
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.+"
 
 	if (buildTools.hasJadeSupport()) {
