@@ -22,4 +22,6 @@ Use the project's Java 21 build toolchain, which emits Java 17 bytecode:
 ./gradlew --configure-on-demand :fabric:test :fabric:build :fabric:verifyRailRendering :fabric:verifyMixinCompatibility :fabric:verifyLightTypeCompatibility
 ```
 
+The test runtime includes Fabric Loader JUnit at the same pinned version as Fabric Loader. Its launcher-session listener initializes Knot before tests, including Minecraft's named-package access transformations. This is required for the signal fixture's real registry bootstrap: a plain application classloader fails when `SimpleRegistry` calls the package-access `RegistryEntry.Reference.setRegistryKey` method after those classes have been remapped into different packages. Keep the real bootstrap and equivalence assertions intact. See [Fabric's unit-testing setup](https://docs.fabricmc.net/develop/automatic-testing).
+
 The tests mock world/client boundaries; they are not an in-game visual, packet, or performance measurement. The artifact contract checks fail when a future Mappings dependency changes the assumed singleton behavior. Forge needs a separate loader build/runtime check before claiming a verified Forge distribution. No FPS or runtime byte-allocation reduction is claimed without profiling; HotSpot may already eliminate some temporary allocations.

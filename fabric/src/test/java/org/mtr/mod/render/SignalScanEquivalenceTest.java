@@ -34,6 +34,8 @@ public final class SignalScanEquivalenceTest {
 
 	@BeforeAll
 	public static void bootstrap() {
+		// Fabric Loader JUnit prepares Knot before this registry bootstrap; the
+		// plain application loader cannot apply Minecraft's package-access fixes.
 		SharedConstants.createGameVersion();
 		Bootstrap.initialize();
 	}

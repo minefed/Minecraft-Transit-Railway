@@ -28,6 +28,8 @@ dependencies {
 	testImplementation "org.junit.platform:junit-platform-launcher:1.+"
 	testImplementation "org.mockito:mockito-core:5.18.0"
 	testRuntimeOnly "org.junit.jupiter:junit-jupiter-engine:5.+"
+	// Registry bootstrap needs Knot's named-package access transformations.
+	testRuntimeOnly "net.fabricmc:fabric-loader-junit:${fabricLoaderVersion}"
 
 	if (buildTools.hasJadeSupport()) {
 		modCompileOnly "maven.modrinth:jade:${buildTools.getJadeVersion()}"
