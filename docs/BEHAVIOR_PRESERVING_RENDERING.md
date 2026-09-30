@@ -16,7 +16,9 @@ Known `getBlockMapped()` / `getSkyMapped()` call sites use the identical `LightT
 
 ## Validation
 
-Use the project's Java 21 build toolchain, which emits Java 17 bytecode:
+Use the project's Java 21 build toolchain, which emits Java 17 bytecode. Install
+Java 17 as well: every Fabric 1.20.4 Test task selects Java 17 through Gradle's
+toolchain API, including the normal Minefed release recipe and artifact checks:
 
 ```
 ./gradlew --configure-on-demand :fabric:test :fabric:build :fabric:verifyRailRendering :fabric:verifyMixinCompatibility :fabric:verifyLightTypeCompatibility

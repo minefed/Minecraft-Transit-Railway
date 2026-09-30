@@ -179,6 +179,16 @@ test {
 	testLogging { showStandardStreams = true }
 }
 
+// The Minefed 1.20.4 distribution runs on Java 17 even though its build tools
+// require Java 21. Apply the runtime contract to every verification entry point.
+if (minecraftVersion == "1.20.4") {
+	tasks.withType(Test).configureEach {
+		javaLauncher = javaToolchains.launcherFor {
+			languageVersion = JavaLanguageVersion.of(17)
+		}
+	}
+}
+
 tasks.register("verifyMixinCompatibility", Test) {
 	group = "verification"
 	description = "Checks the distribution JAR's Mixin annotations against older supported runtimes."
