@@ -203,7 +203,21 @@ tasks.register("verifyRailRendering", Test) {
 	}
 }
 
+tasks.register("verifyLightTypeCompatibility", Test) {
+	group = "verification"
+	description = "Checks resolved and bundled light singleton contracts and ordered sampling sites."
+	dependsOn tasks.named("testClasses"), tasks.named("remapJar")
+	testClassesDirs = sourceSets.test.output.classesDirs
+	classpath = sourceSets.test.runtimeClasspath
+	useJUnitPlatform()
+	filter { includeTestsMatching "org.mtr.mod.render.LightTypeContractTest" }
+	final def distributionJar = tasks.named("remapJar").flatMap { it.archiveFile }
+	inputs.file(distributionJar)
+	systemProperty "mtr.test.modJar", distributionJar.get().asFile.absolutePath
+}
+
 tasks.named("check") {
 	dependsOn tasks.named("verifyMixinCompatibility")
 	dependsOn tasks.named("verifyRailRendering")
+	dependsOn tasks.named("verifyLightTypeCompatibility")
 }

@@ -295,7 +295,7 @@ public class RenderRails implements IGui {
 						continue;
 					}
 					renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
-						final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+						final int light = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.BLOCK, blockPos), clientWorld.getLightLevel(LightType.SKY, blockPos));
 						final double differenceX = x3 - x1;
 						final double differenceZ = z3 - z1;
 						final double yaw = Math.atan2(differenceZ, differenceX);
@@ -320,7 +320,7 @@ public class RenderRails implements IGui {
 			final Identifier texture = renderType[1] && !renderType[0] ? IRON_BLOCK_TEXTURE : defaultTexture;
 			renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
 				final float textureOffset = (((int) (x1 + z1)) % 4) * 0.25F;
-				final int light = renderState == RenderState.FLASHING || renderState == RenderState.COLORED ? GraphicsHolder.getDefaultLight() : LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+				final int light = renderState == RenderState.FLASHING || renderState == RenderState.COLORED ? GraphicsHolder.getDefaultLight() : LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.BLOCK, blockPos), clientWorld.getLightLevel(LightType.SKY, blockPos));
 				MainRenderer.scheduleRender(texture, false, QueuedRenderLayer.EXTERIOR, (graphicsHolder, offset) -> {
 					IDrawing.drawTexture(graphicsHolder, x1, y1 + yOffset, z1, x2, y1 + yOffset + SMALL_OFFSET, z2, x3, y2 + yOffset, z3, x4, y2 + yOffset + SMALL_OFFSET, z4, offset, u1 < 0 ? 0 : u1, v1 < 0 ? 0.1875F + textureOffset : v1, u2 < 0 ? 1 : u2, v2 < 0 ? 0.3125F + textureOffset : v2, Direction.UP, color, light);
 					IDrawing.drawTexture(graphicsHolder, x2, y1 + yOffset + SMALL_OFFSET, z2, x1, y1 + yOffset, z1, x4, y2 + yOffset + SMALL_OFFSET, z4, x3, y2 + yOffset, z3, offset, u1 < 0 ? 0 : u1, v1 < 0 ? 0.1875F + textureOffset : v1, u2 < 0 ? 1 : u2, v2 < 0 ? 0.3125F + textureOffset : v2, Direction.UP, color, light);
@@ -361,7 +361,7 @@ public class RenderRails implements IGui {
 						if (view.isVisible(segment.startX, segment.startY, segment.startZ) &&
 								(frustum == null || frustum.isVisible(segment.x, segment.y, segment.z, radius))) {
 							final BlockPos position = segment.lightPosition();
-							final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.getBlockMapped(), position), world.getLightLevel(LightType.getSkyMapped(), position));
+							final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.BLOCK, position), world.getLightLevel(LightType.SKY, position));
 							segment.transform(matrix, base, offset.getXMapped(), offset.getYMapped(), offset.getZMapped());
 							// OptimizedRenderer.queue copies only the position matrix;
 							// the MatrixStack normal matrix is not consumed by this path.
@@ -393,7 +393,7 @@ public class RenderRails implements IGui {
 			final float u2 = u1 + width;
 
 			renderWithinRenderDistance(rail, (blockPos, x1, z1, x2, z2, x3, z3, x4, z4, y1, y2) -> {
-				final int light = shouldFlash ? GraphicsHolder.getDefaultLight() : LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+				final int light = shouldFlash ? GraphicsHolder.getDefaultLight() : LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.BLOCK, blockPos), clientWorld.getLightLevel(LightType.SKY, blockPos));
 				MainRenderer.scheduleRender(WOOL_TEXTURE, false, shouldFlash ? QueuedRenderLayer.EXTERIOR : QueuedRenderLayer.LIGHT, (graphicsHolder, offset) -> {
 					IDrawing.drawTexture(graphicsHolder, x1, y1 + 0.125, z1, x2, y1 + 0.125 + SMALL_OFFSET, z2, x3, y2 + 0.125, z3, x4, y2 + 0.125 + SMALL_OFFSET, z4, offset, u1, 0, u2, 1, Direction.UP, color, light);
 					IDrawing.drawTexture(graphicsHolder, x4, y2 + 0.125 + SMALL_OFFSET, z4, x3, y2 + 0.125, z3, x2, y1 + 0.125 + SMALL_OFFSET, z2, x1, y1 + 0.125, z1, offset, u1, 0, u2, 1, Direction.UP, color, light);

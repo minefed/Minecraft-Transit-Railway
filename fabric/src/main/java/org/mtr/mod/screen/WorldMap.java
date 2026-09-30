@@ -107,7 +107,7 @@ public class WorldMap {
 						final int lightLevel;
 						if (mapOverlayMode.calculateLight) {
 							final BlockPos lightReferencePos = finalPos.up();
-							lightLevel = Math.max(world.getLightLevel(LightType.getBlockMapped(), lightReferencePos), world.getLightLevel(LightType.getSkyMapped(), lightReferencePos));
+							lightLevel = Math.max(world.getLightLevel(LightType.BLOCK, lightReferencePos), world.getLightLevel(LightType.SKY, lightReferencePos));
 						} else {
 							lightLevel = 15;
 						}

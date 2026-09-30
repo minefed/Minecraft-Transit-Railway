@@ -31,7 +31,7 @@ public class RenderSignalSemaphore<T extends BlockSignalSemaphoreBase.BlockEntit
 				storedMatrixTransformations.transform(graphicsHolder, offset);
 				graphicsHolder.translate(0.1875, 0.375, 0);
 				graphicsHolder.rotateZDegrees(-180 - angle);
-				final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.getBlockMapped(), pos), world.getLightLevel(LightType.getSkyMapped(), pos));
+				final int light = LightmapTextureManager.pack(world.getLightLevel(LightType.BLOCK, pos), world.getLightLevel(LightType.SKY, pos));
 				IDrawing.drawTexture(graphicsHolder, -0.705F, -0.5F, -0.19375F, 0.295F, 0.5F, -0.19375F, Direction.UP, ARGB_WHITE, light);
 				IDrawing.drawTexture(graphicsHolder, 0.295F, -0.5F, -0.19375F, -0.705F, 0.5F, -0.19375F, 1, 0, 0, 1, Direction.UP, ARGB_WHITE, light);
 				graphicsHolder.pop();

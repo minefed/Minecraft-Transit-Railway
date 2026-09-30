@@ -536,7 +536,7 @@ public class RenderVehicles implements IGui {
 			final Vector position8 = previousConnectionPositions.position4;
 
 			final BlockPos blockPosConnection = Init.newBlockPos(position1.x, position1.y + 1, position1.z);
-			final int lightConnection = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPosConnection), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPosConnection));
+			final int lightConnection = LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.BLOCK, blockPosConnection), clientWorld.getLightLevel(LightType.SKY, blockPosConnection));
 			final Vector3d zeroVector = Vector3d.getZeroMapped();
 
 			MainRenderer.scheduleRender(outerSideTexture, false, QueuedRenderLayer.EXTERIOR, (graphicsHolder, offset) -> {

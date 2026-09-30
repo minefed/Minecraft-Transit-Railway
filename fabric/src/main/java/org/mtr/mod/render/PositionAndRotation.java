@@ -87,7 +87,7 @@ public final class PositionAndRotation {
 			return 0;
 		} else {
 			final BlockPos blockPos = Init.newBlockPos(position.x, position.y + 1, position.z);
-			return LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.getBlockMapped(), blockPos), clientWorld.getLightLevel(LightType.getSkyMapped(), blockPos));
+			return LightmapTextureManager.pack(clientWorld.getLightLevel(LightType.BLOCK, blockPos), clientWorld.getLightLevel(LightType.SKY, blockPos));
 		}
 	}
 
