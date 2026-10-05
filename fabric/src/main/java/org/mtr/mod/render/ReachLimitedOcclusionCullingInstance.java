@@ -2,11 +2,13 @@ package org.mtr.mod.render;
 
 import com.logisticscraft.occlusionculling.DataProvider;
 import com.logisticscraft.occlusionculling.OcclusionCullingInstance;
+import com.logisticscraft.occlusionculling.cache.OcclusionCache;
 import com.logisticscraft.occlusionculling.util.MathUtilities;
 import com.logisticscraft.occlusionculling.util.Vec3d;
 
 /**
- * Uses {@link DirtyBlockOcclusionCache} and skips boxes whose cells are all outside the cache cube.
+ * Uses a dirty dense cache at common view distances, a sparse cache at larger distances,
+ * and skips boxes whose cells are all outside the cache cube.
  * <p>
  * For such boxes, the library marks every cell as skipped because its cache lookup returns
  * {@code -1}, performs no ray or cache access, and returns {@code false}. The camera-inside
@@ -18,12 +20,19 @@ final class ReachLimitedOcclusionCullingInstance extends OcclusionCullingInstanc
 	private static final double AABB_EXPANSION = 0.5;
 	private static final int MAX_COORDINATE = 1 << 29;
 	private static final long MAX_CELLS = 1L << 24;
+	// Dense lookup avoids sparse-brick addressing in every ray step. Limit its payload
+	// to 32 MiB (16 chunks); larger distances retain sparse allocation, including 32 chunks.
+	private static final int MAX_DENSE_REACH = 16 * 16;
 
 	private final int reach;
 
 	ReachLimitedOcclusionCullingInstance(int maxDistance, DataProvider provider) {
-		super(maxDistance, provider, new DirtyBlockOcclusionCache(maxDistance), AABB_EXPANSION);
+		super(maxDistance, provider, createCache(maxDistance), AABB_EXPANSION);
 		reach = maxDistance;
+	}
+
+	static OcclusionCache createCache(int maxDistance) {
+		return maxDistance >= 0 && maxDistance <= MAX_DENSE_REACH ? new DenseDirtyOcclusionCache(maxDistance) : new DirtyBlockOcclusionCache(maxDistance);
 	}
 
 	@Override

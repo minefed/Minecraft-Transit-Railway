@@ -16,12 +16,17 @@ public final class OcclusionCullingEquivalenceTest {
 
 	@Test
 	public void dirtyBlockCacheMatchesArrayCacheIncludingInvalidIndices() throws ReflectiveOperationException {
+		assertCacheMatchesArray(false);
+		assertCacheMatchesArray(true);
+	}
+
+	private static void assertCacheMatchesArray(boolean dense) throws ReflectiveOperationException {
 		final Random random = new Random(3);
 		for (final int reach : new int[]{0, 1, 2, 5, 16, 33}) {
 			final ArrayOcclusionCache original = new ArrayOcclusionCache(reach);
-			final DirtyBlockOcclusionCache optimized = new DirtyBlockOcclusionCache(reach);
+			final OcclusionCache optimized = dense ? new DenseDirtyOcclusionCache(reach) : new DirtyBlockOcclusionCache(reach);
 			final byte[] originalBytes = bytes(original);
-			assertEquals(originalBytes.length, optimized.byteLength());
+			assertEquals(originalBytes.length, bytes(optimized).length);
 			for (int step = 0; step < 200_000; step++) {
 				final int operation = random.nextInt(20);
 				final int range = reach * 2 + 4;
@@ -37,6 +42,19 @@ public final class OcclusionCullingEquivalenceTest {
 			optimized.resetCache();
 			assertArrayEquals(new byte[originalBytes.length], bytes(optimized));
 		}
+	}
+
+	@Test
+	public void denseCachePayloadIsBoundedToSixteenChunks() throws ReflectiveOperationException {
+		final OcclusionCache atLimit = ReachLimitedOcclusionCullingInstance.createCache(16 * 16);
+		assertInstanceOf(DenseDirtyOcclusionCache.class, atLimit);
+		assertEquals(32 << 20, bytes(atLimit).length);
+		assertInstanceOf(DenseDirtyOcclusionCache.class, ReachLimitedOcclusionCullingInstance.createCache(12 * 16));
+		assertInstanceOf(DirtyBlockOcclusionCache.class, ReachLimitedOcclusionCullingInstance.createCache(16 * 16 + 1));
+		assertInstanceOf(DirtyBlockOcclusionCache.class, ReachLimitedOcclusionCullingInstance.createCache(17 * 16));
+		final DirtyBlockOcclusionCache atMaximum = assertInstanceOf(DirtyBlockOcclusionCache.class, ReachLimitedOcclusionCullingInstance.createCache(32 * 16));
+		assertEquals(0, atMaximum.allocatedBrickCount());
+		assertEquals(256 << 20, atMaximum.byteLength());
 	}
 
 	@Test
@@ -93,12 +111,14 @@ public final class OcclusionCullingEquivalenceTest {
 			final TestDataProvider provider = new TestDataProvider(random.nextLong());
 			final OcclusionCullingInstance original = new OcclusionCullingInstance(reach, provider);
 			final ReachLimitedOcclusionCullingInstance optimized = new ReachLimitedOcclusionCullingInstance(reach, provider);
+			final OcclusionCullingInstance sparse = new OcclusionCullingInstance(reach, provider, new DirtyBlockOcclusionCache(reach), 0.5);
 			int skipped = 0;
 			int visible = 0;
 			for (int step = 0; step < 60_000; step++) {
 				if (random.nextInt(40) == 0) {
 					original.resetCache();
 					optimized.resetCache();
+					sparse.resetCache();
 				}
 				final Vec3d camera = new Vec3d(random.nextInt(8) + random.nextDouble(), 60 + random.nextInt(8) + random.nextDouble(), random.nextInt(8) + random.nextDouble());
 				final double scale = random.nextInt(4) == 0 ? reach * 4 : reach;
@@ -119,6 +139,7 @@ public final class OcclusionCullingEquivalenceTest {
 				}
 				visible += expected ? 1 : 0;
 				assertEquals(expected, optimized.isAABBVisible(min, max, camera), "reach " + reach + " step " + step);
+				assertEquals(expected, sparse.isAABBVisible(min, max, camera), "sparse reach " + reach + " step " + step);
 			}
 			assertTrue(skipped > 1000, "Boxes outside the cache cube must use the early return: " + skipped);
 			assertTrue(visible > 1000 && visible < 59_000, "The fixture must contain visible and hidden boxes: " + visible);
@@ -194,7 +215,10 @@ public final class OcclusionCullingEquivalenceTest {
 		return bytes;
 	}
 
-	private static byte[] bytes(ArrayOcclusionCache cache) throws ReflectiveOperationException {
+	private static byte[] bytes(OcclusionCache cache) throws ReflectiveOperationException {
+		if (cache instanceof DirtyBlockOcclusionCache) {
+			return bytes((DirtyBlockOcclusionCache) cache);
+		}
 		final Field field = cache.getClass().getDeclaredField("cache");
 		field.setAccessible(true);
 		return (byte[]) field.get(cache);

@@ -215,6 +215,20 @@ tasks.register("verifyRailRendering", Test) {
 	}
 }
 
+// Optional timing probe: one cache kind per JVM avoids mixing cache implementations
+// at the library's hot call sites. This is deliberately not a timing assertion in check.
+tasks.register("benchmarkOcclusionCache", JavaExec) {
+	group = "verification"
+	description = "Measures synthetic culling: --args='sparse|selected reach open|pillars|walls [frames]'."
+	dependsOn tasks.named("testClasses")
+	classpath = sourceSets.test.runtimeClasspath
+	mainClass = "org.mtr.mod.render.OcclusionCacheBenchmark"
+	javaLauncher = javaToolchains.launcherFor {
+		languageVersion = JavaLanguageVersion.of(17)
+	}
+	maxHeapSize = "512m"
+}
+
 tasks.register("verifyLightTypeCompatibility", Test) {
 	group = "verification"
 	description = "Checks resolved and bundled light singleton contracts and ordered sampling sites."

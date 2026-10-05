@@ -219,7 +219,7 @@ Leaks fixed without visible change:
   `DynamicTextureCache`, including those waiting for delayed deletion. Cropped
   originals and the RAM copy of uploaded textures are closed, and destroyed
   texture names are reused so vanilla render layer caches stay bounded.
-- **Occlusion cache.** It is freed when leaving a world, and
+- **Occlusion cache (September implementation).** It is freed when leaving a world, and
   `DirtyBlockOcclusionCache` stores the same bytes in 16x16x16-cell bricks that
   are allocated on first write and released after 256 idle resets. Every
   operation, byte and exception matches `ArrayOcclusionCache`; at render distance
@@ -247,6 +247,60 @@ and `:fabric:verifyMixinCompatibility` passed. In a Fabric Loader 0.18.4 Knot
 run with the whole Minefed client pack, `MixinEnvironment.audit()` passed and
 all seven new mixins were applied. The game was not started, so the effect on
 memory was not measured in game.
+
+## Occlusion lookup regression correction (2026-10-05)
+
+The sparse cache saved memory, but its extra coordinate checks and brick addressing
+in every ray step increased CPU time. The Java 17 probe below uses the actual
+occlusion library and the production cache factory. At 12 chunks, selecting the
+earlier dense dirty cache reduced the three synthetic batch medians by 26–32%.
+These are synthetic culling batch times, not measured gameplay frame times or FPS gains.
+
+`ReachLimitedOcclusionCullingInstance` now selects `DenseDirtyOcclusionCache` through
+16 chunks. It keeps the earlier 64-byte dirty-block reset, so it does not clear the
+whole array on every culling batch. Its byte payload is 13.5 MiB at 12 chunks and is
+capped at 32 MiB at 16 chunks, plus at most approximately 64 KiB of dirty bits.
+Larger distances still use the sparse implementation, avoiding a 256 MiB upfront
+allocation at 32 chunks. Both implementations are still freed when leaving a world.
+World reads, cache values, invalid-index behavior, and culling decisions are unchanged.
+
+The optional benchmark runs 512 deterministic AABBs per batch, a moving camera,
+cache reset before each batch, five warmup rounds, and seven measured rounds. Run
+each case in its own JVM; `selected` uses the production cache factory, while
+`sparse` reproduces the September cache policy. The fourth argument optionally
+reduces the batches per round for large reaches (default 50).
+
+```text
+gradlew :fabric:benchmarkOcclusionCache --args="sparse 192 walls" --configure-on-demand
+gradlew :fabric:benchmarkOcclusionCache --args="selected 192 walls" --configure-on-demand
+```
+
+Output columns: cache policy, reach in blocks, scene (`open`, `pillars`, `walls`),
+median/minimum/maximum milliseconds per batch, visible-result checksum, and allocated
+cache payload in KiB (metadata excluded). Absolute timings depend on the machine and
+concurrent load. `OcclusionCullingEquivalenceTest` checks both implementations against
+the library's bytes, resets, exceptions and culling results, and verifies the cache
+selection and allocation bounds at 12, 16, 17 and 32 chunks.
+
+| Distance / scene | Sparse median (ms) | Selected median (ms) | Matching checksum | Selected payload (KiB) |
+| --- | ---: | ---: | ---: | ---: |
+| 12 chunks / open | 1.528 | 1.077 | 179200 | 13824 |
+| 12 chunks / pillars | 4.688 | 3.469 | 166880 | 13824 |
+| 12 chunks / walls | 31.320 | 21.148 | 31850 | 13824 |
+| 16 chunks / walls | 23.084 | 17.371 | 3948 | 32768 |
+| 17 chunks / walls | 26.736 | 28.975 | 3570 | 989 |
+| 32 chunks / walls | 22.587 | 22.874 | 1547 | 1466 |
+
+The 12-chunk cases used 50 batches per measured round; the larger cases used 10.
+At 17 and 32 chunks, both policies select the same sparse class and allocate the
+same payload; timing variation there is not an implementation change. A 1 KiB
+linear-page experiment did not consistently improve the sparse implementation and
+was not adopted.
+
+Validation: the full Fabric release recipe passed with Java 17 verification:
+`:fabric:test` (79 tests), `:fabric:verifyRailRendering` (8),
+`:fabric:verifyMixinCompatibility` (8), and `:fabric:verifyLightTypeCompatibility` (3).
+All completed without failures or skipped tests; the remapped Fabric 1.20.4 JAR was built.
 
 ## Fabric Mixin compatibility
 
