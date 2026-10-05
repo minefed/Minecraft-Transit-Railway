@@ -138,7 +138,13 @@ public final class WorkerThread extends CustomThread {
 		@Override
 		public boolean prepareChunk(int chunkX, int chunkZ) {
 			clientWorld = minecraftClient.getWorldMapped();
-			blockView = clientWorld == null ? null : new BlockView(clientWorld.data);
+			if (clientWorld == null) {
+				blockView = null;
+			} else if (blockView == null || blockView.data != clientWorld.data) {
+				// The library prepares every uncached voxel, even within the same chunk.
+				// Only the world identity changes this immutable view wrapper.
+				blockView = new BlockView(clientWorld.data);
+			}
 			return clientWorld != null;
 		}
 
