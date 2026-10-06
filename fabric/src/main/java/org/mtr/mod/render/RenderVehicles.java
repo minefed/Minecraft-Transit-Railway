@@ -68,7 +68,7 @@ public class RenderVehicles implements IGui {
 								.stream()
 								.map(bogiePositionPair -> PositionAndRotation.forBogieTransform(bogiePositionPair.left(), bogiePositionPair.right(), true))
 								.collect(Collectors.toCollection(ObjectArrayList::new));
-						return new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, new PositionAndRotation(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending)));
+						return new ObjectObjectImmutablePair<>(vehicleCarAndPosition.left(), new ObjectObjectImmutablePair<>(bogiePositions, PositionAndRotation.forVehicleTransform(bogiePositions, vehicleCarAndPosition.left(), vehicle.getTransportMode().hasPitchAscending || vehicle.getTransportMode().hasPitchDescending)));
 					})
 					.collect(Collectors.toCollection(ObjectArrayList::new));
 
@@ -110,6 +110,7 @@ public class RenderVehicles implements IGui {
 				}
 
 				if (vehicle.persistentVehicleData.rayTracing[carNumber] || VehicleRidingMovement.isRiding(vehicle.getId())) {
+					final int vehicleLight = vehicleCarDetails.right().right().sampleLight();
 					CustomResourceLoader.getVehicleById(vehicle.getTransportMode(), vehicleCarDetails.left().getVehicleId(), vehicleResourceDetails -> {
 						final VehicleResource vehicleResource = vehicleResourceDetails.left();
 						final boolean fromResourcePackCreator = vehicleResourceDetails.rightBoolean() && !vehicle.getIsOnRoute();
@@ -124,9 +125,9 @@ public class RenderVehicles implements IGui {
 							final PositionAndRotation bogieRenderingPositionAndRotation = getRenderPositionAndRotation(offsetVector, offsetRotation, ridingCarPositionAndRotation, absoluteBogiePositionAndRotation, cameraShakeOffset, false);
 							final StoredMatrixTransformations storedMatrixTransformations = getStoredMatrixTransformations(offsetVector == null, bogieRenderingPositionAndRotation, 0);
 							if (OptimizedRenderer.hasOptimizedRendering()) {
-								vehicleResource.queueBogie(bogieIndex, storedMatrixTransformations, vehicle, absoluteVehicleCarPositionAndRotation.light);
+								vehicleResource.queueBogie(bogieIndex, storedMatrixTransformations, vehicle, vehicleLight);
 							} else {
-								vehicleResource.iterateBogieModels(bogieIndex, (modelIndex, model) -> model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, new ObjectArrayList<>(), fromResourcePackCreator));
+								vehicleResource.iterateBogieModels(bogieIndex, (modelIndex, model) -> model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, vehicleLight, new ObjectArrayList<>(), fromResourcePackCreator));
 							}
 						});
 
@@ -221,11 +222,11 @@ public class RenderVehicles implements IGui {
 						// Each car can have more than one model defined
 						final StoredMatrixTransformations storedMatrixTransformations = getStoredMatrixTransformations(offsetVector == null, vehicleCarRenderingPositionAndRotation, oscillationAmount);
 						if (OptimizedRenderer.hasOptimizedRendering()) {
-							vehicleResource.queue(storedMatrixTransformations, vehicle, carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), absoluteVehicleCarPositionAndRotation.light, openDoorways.isEmpty());
+							vehicleResource.queue(storedMatrixTransformations, vehicle, carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), vehicleLight, openDoorways.isEmpty());
 						}
 
 						vehicleResource.iterateModels(carNumber, vehicle.vehicleExtraData.immutableVehicleCars.size(), (modelIndex, model) -> {
-							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, absoluteVehicleCarPositionAndRotation.light, openDoorways, fromResourcePackCreator);
+							model.render(storedMatrixTransformations, vehicle, carNumber, scrollingDisplayIndexTracker, vehicleLight, openDoorways, fromResourcePackCreator);
 
 							while (modelIndex >= previousGangwayPositionsList.size()) {
 								previousGangwayPositionsList.add(new PreviousConnectionPositions());

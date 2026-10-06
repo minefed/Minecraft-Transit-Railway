@@ -40,6 +40,15 @@ public final class PositionAndRotation {
 	}
 
 	public PositionAndRotation(ObjectArrayList<PositionAndRotation> bogiePositions, VehicleCar vehicleCar, boolean hasPitch) {
+		this(bogiePositions, vehicleCar, hasPitch, true);
+	}
+
+	// Culling needs the car geometry even when no model will consume its light.
+	static PositionAndRotation forVehicleTransform(ObjectArrayList<PositionAndRotation> bogiePositions, VehicleCar vehicleCar, boolean hasPitch) {
+		return new PositionAndRotation(bogiePositions, vehicleCar, hasPitch, false);
+	}
+
+	private PositionAndRotation(ObjectArrayList<PositionAndRotation> bogiePositions, VehicleCar vehicleCar, boolean hasPitch, boolean sampleLight) {
 		if (bogiePositions.size() == 1 || bogiePositions.size() == 2) {
 			final Vector bogiesMidpoint;
 
@@ -70,7 +79,12 @@ public final class PositionAndRotation {
 			pitch = 0;
 		}
 
-		light = getLight(position);
+		light = sampleLight ? getLight(position) : 0;
+	}
+
+	// Read afresh in each visible render pass; never retain light across frames.
+	int sampleLight() {
+		return getLight(position);
 	}
 
 	public <T> T transformForwards(T initialValue, Rotate<T> rotateX, Rotate<T> rotateY, Translate<T> translate) {
