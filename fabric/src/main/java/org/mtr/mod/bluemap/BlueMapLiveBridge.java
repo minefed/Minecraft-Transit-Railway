@@ -3,6 +3,7 @@ package org.mtr.mod.bluemap;
 import org.mtr.core.Main;
 import org.mtr.core.simulation.Simulator;
 import org.mtr.libraries.com.google.gson.JsonObject;
+import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.com.google.gson.JsonParser;
 import org.mtr.mapping.holder.MinecraftServer;
 import org.mtr.mapping.holder.World;
@@ -17,6 +18,7 @@ import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.FileAlreadyExistsException;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashMap;
@@ -141,6 +143,63 @@ public final class BlueMapLiveBridge {
 		}
 	}
 
+	/** Same-directory rename publishes a complete file; absence is checked atomically by move. */
+	static void createInitial(Path file, String content) throws IOException {
+		Files.createDirectories(file.getParent());
+		if (Files.exists(file)) {
+			return;
+		}
+		final Path temporary = Files.createTempFile(file.getParent(), ".mtr-initial-", ".tmp");
+		try {
+			Files.writeString(temporary, content, StandardCharsets.UTF_8);
+			try {
+				Files.move(temporary, file); // Deliberately no REPLACE_EXISTING, including concurrent edits.
+			} catch (FileAlreadyExistsException ignored) {
+				// An administrator or another initializer created it first.
+			}
+		} finally {
+			Files.deleteIfExists(temporary);
+		}
+	}
+
+	/** Revoke every owned file, including removed worlds; one failed file must not retain the others. */
+	static void clearPublicSnapshots(Path root, Collection<String> currentPrefixes, String revision, long timestamp) throws IOException {
+		final java.util.Set<String> prefixes = new java.util.LinkedHashSet<>(currentPrefixes);
+		IOException failure = null;
+		if (Files.isDirectory(root)) {
+			try (java.util.stream.Stream<Path> files = Files.list(root)) {
+				files.map(path -> path.getFileName().toString())
+						.filter(name -> name.matches("[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}-(vehicles|rails)\\.json(?:\\.tmp)?"))
+						.forEach(name -> prefixes.add(name.substring(0, 36)));
+			} catch (IOException e) {
+				failure = e;
+			}
+		}
+		for (String prefix : prefixes) {
+			final JsonObject vehicles = BlueMapSnapshot.empty("vehicles", timestamp);
+			vehicles.add("arrivals", new JsonArray());
+			vehicles.addProperty("arrivalsTimestamp", 0);
+			vehicles.addProperty("publicationRevision", revision);
+			failure = writeOrCollect(root.resolve(prefix + "-vehicles.json"), vehicles.toString(), failure);
+			final JsonObject infrastructure = BlueMapSnapshot.empty("rails", timestamp);
+			infrastructure.add("routes", new JsonArray());
+			infrastructure.add("stations", new JsonArray());
+			infrastructure.addProperty("publicationRevision", revision);
+			failure = writeOrCollect(root.resolve(prefix + "-rails.json"), infrastructure.toString(), failure);
+		}
+		if (failure != null) throw failure;
+	}
+
+	private static IOException writeOrCollect(Path file, String contents, IOException failure) {
+		try {
+			atomicWrite(file, contents);
+		} catch (IOException e) {
+			if (failure == null) return e;
+			failure.addSuppressed(e);
+		}
+		return failure;
+	}
+
 	private static JsonObject index() {
 		final JsonObject result = new JsonObject();
 		result.addProperty("schema", 1);
@@ -154,6 +213,14 @@ public final class BlueMapLiveBridge {
 		private final List<Simulator> simulators;
 		private final Map<Object, String> worlds;
 		private final Path catalog;
+		private final Path routeCatalogFile;
+		private final Path publicRoutesFile;
+		private final List<CatalogExport> catalogExports = new ArrayList<>();
+		private final Map<String, JsonObject> routeCatalogs = new LinkedHashMap<>();
+		private final String processId = UUID.randomUUID().toString();
+		private volatile Publication publication = new Publication(0, BlueMapRoutePolicy.CLOSED);
+		private long nextPolicyRead;
+		private String lastPolicyError = "";
 		private final ScheduledExecutorService io = Executors.newSingleThreadScheduledExecutor(runnable -> {
 			final Thread thread = new Thread(runnable, "MTR-BlueMap-export");
 			thread.setDaemon(true);
@@ -168,6 +235,15 @@ public final class BlueMapLiveBridge {
 			this.simulators = snapshot.simulators(main);
 			this.worlds = worlds;
 			catalog = runDirectory.resolve("config/mtr/bluemap-vehicles.json");
+			routeCatalogFile = runDirectory.resolve("config/mtr/bluemap-routes.json");
+			publicRoutesFile = runDirectory.resolve("config/mtr/bluemap-public-routes.json");
+			for (Simulator simulator : simulators) {
+				catalogExports.add(new CatalogExport(simulator));
+				final JsonObject world = new JsonObject();
+				world.addProperty("worldId", simulator.dimension);
+				world.add("routes", new JsonArray());
+				routeCatalogs.put(simulator.dimension, world);
+			}
 		}
 
 		private void start() {
@@ -179,6 +255,22 @@ public final class BlueMapLiveBridge {
 				return;
 			}
 			try {
+				final long now = System.currentTimeMillis();
+				try {
+					createInitial(publicRoutesFile, BlueMapRoutePolicy.INITIAL);
+					createInitial(routeCatalogFile, catalogDocument(now).toString());
+				} catch (IOException e) {
+					logError("Could not create private route configuration", e);
+				}
+				if (now >= nextPolicyRead) {
+					readPolicy();
+					nextPolicyRead = now + 2000;
+				}
+				try {
+					updateRouteCatalogs(now);
+				} catch (RuntimeException e) {
+					logError("Could not capture private route catalog", e);
+				}
 				if (session != null && (session.api != api || !session.active)) {
 					clear(session);
 					session = null;
@@ -190,31 +282,52 @@ public final class BlueMapLiveBridge {
 				if (current == null || !current.active || closed) {
 					return;
 				}
-				final long now = System.currentTimeMillis();
+				if (current.needsReset) {
+					writeEmpty(current);
+					current.needsReset = false;
+				}
 				for (WorldExport world : current.worlds) {
-					final JsonObject vehicles = world.vehicles.getAndSet(null);
-					final JsonObject infrastructure = world.infrastructure.getAndSet(null);
-					if (vehicles != null) {
-						atomicWrite(current.root.resolve(world.prefix + "-vehicles.json"), vehicles.toString());
-					}
-					if (infrastructure != null) {
-						atomicWrite(current.root.resolve(world.prefix + "-rails.json"), infrastructure.toString());
+					final SnapshotPair latest = world.mailbox.take();
+					if (latest != null && latest.revision == publication.revision) {
+						atomicWrite(current.root.resolve(world.prefix + "-vehicles.json"), latest.vehicles.toString());
+						if (latest.infrastructure != null) {
+							atomicWrite(current.root.resolve(world.prefix + "-rails.json"), latest.infrastructure.toString());
+							world.nextInfrastructure = now + 30000;
+						}
 					}
 					if (world.pending.compareAndSet(false, true)) {
 						final boolean updateInfrastructure = now >= world.nextInfrastructure;
+						final Publication policy = publication;
+						final BlueMapRoutePolicy.WorldSelection selection = policy.policy.world(world.simulator.dimension);
 						world.simulator.run(() -> {
 							try {
-								if (!current.active || closed) {
+								if (!current.active || closed || publication != policy) {
 									return;
 								}
-								final JsonObject vehicleData = snapshot.vehicles(world.simulator, System.currentTimeMillis());
-								final JsonObject infrastructureData = updateInfrastructure ? BlueMapSnapshot.infrastructure(world.simulator, System.currentTimeMillis()) : null;
-								if (current.active && !closed) {
-									world.vehicles.set(vehicleData);
-									if (infrastructureData != null) {
-										world.infrastructure.set(infrastructureData);
-										world.nextInfrastructure = System.currentTimeMillis() + 30000;
+								final long captureTime = System.currentTimeMillis();
+								final JsonObject vehicleData = snapshot.vehicles(world.simulator, captureTime, selection);
+								final JsonObject infrastructureData = updateInfrastructure ? BlueMapSnapshot.infrastructure(world.simulator, captureTime, selection) : null;
+								if (world.arrivals == null || world.arrivalsRevision != policy.revision || captureTime >= world.nextArrivals) {
+									try {
+										world.arrivals = BlueMapSnapshot.arrivals(world.simulator, captureTime, selection);
+										world.arrivalsFailed.set(false);
+									} catch (Exception e) {
+										world.arrivals = BlueMapSnapshot.arrivalData(new JsonArray(), 0);
+										if (world.arrivalsFailed.compareAndSet(false, true)) {
+											Init.LOGGER.warn("[MTR BlueMap] Arrivals unavailable for {}", world.simulator.dimension, e);
+										}
 									}
+									world.arrivalsRevision = policy.revision;
+									world.nextArrivals = captureTime + 2000;
+								}
+								vehicleData.add("arrivals", world.arrivals.get("arrivals"));
+								vehicleData.add("arrivalsTimestamp", world.arrivals.get("arrivalsTimestamp"));
+								stamp(vehicleData, policy);
+								if (infrastructureData != null) {
+									stamp(infrastructureData, policy);
+								}
+								if (current.active && !closed && publication == policy) {
+									world.mailbox.publish(policy.revision, new SnapshotPair(policy.revision, vehicleData, infrastructureData));
 								}
 							} catch (Exception e) {
 								if (world.failed.compareAndSet(false, true)) {
@@ -231,11 +344,106 @@ public final class BlueMapLiveBridge {
 					current.nextCatalog = now + 30000;
 				}
 			} catch (Exception e) {
-				if (System.currentTimeMillis() - lastError > 30000) {
-					lastError = System.currentTimeMillis();
-					Init.LOGGER.warn("[MTR BlueMap] Live export failed; will retry", e);
+				logError("Live export failed; will retry", e);
+			}
+		}
+
+		private void logError(String message, Exception error) {
+			if (System.currentTimeMillis() - lastError > 30000) {
+				lastError = System.currentTimeMillis();
+				Init.LOGGER.warn("[MTR BlueMap] " + message, error);
+			}
+		}
+
+		private JsonObject catalogDocument(long timestamp) {
+			final JsonObject result = new JsonObject();
+			result.addProperty("schema", 1);
+			result.addProperty("updatedAt", timestamp);
+			final JsonArray catalogs = new JsonArray();
+			routeCatalogs.values().forEach(catalogs::add);
+			result.add("worlds", catalogs);
+			return result;
+		}
+
+		/** Catalog data never enters a public snapshot or the BlueMap web directory. */
+		private void updateRouteCatalogs(long now) {
+			boolean changed = false;
+			for (CatalogExport world : catalogExports) {
+				final JsonObject latest = world.latest.getAndSet(null);
+				if (latest != null) {
+					routeCatalogs.put(world.simulator.dimension, latest);
+					world.received = true;
+					changed = true;
+				}
+				if (now >= world.nextCapture && world.pending.compareAndSet(false, true)) {
+					world.nextCapture = now + 30000;
+					world.simulator.run(() -> {
+						try {
+							if (!closed) {
+								world.latest.set(BlueMapSnapshot.routeCatalog(world.simulator, world.simulator.dimension));
+							}
+						} catch (Exception e) {
+							Init.LOGGER.warn("[MTR BlueMap] Route catalog unavailable for {}", world.simulator.dimension, e);
+						} finally {
+							world.pending.set(false);
+						}
+					});
 				}
 			}
+			if (changed) {
+				nextPolicyRead = 0;
+				try {
+					atomicWrite(routeCatalogFile, catalogDocument(now).toString());
+				} catch (IOException e) {
+					// An unwritable private catalog must not prevent policy revocation.
+					logError("Could not update private route catalog", e);
+				}
+			}
+		}
+
+		private void readPolicy() {
+			BlueMapRoutePolicy next = BlueMapRoutePolicy.CLOSED;
+			try {
+				if (Files.size(publicRoutesFile) > 2 * 1024 * 1024) {
+					throw new IOException("Public route settings exceed 2 MiB");
+				}
+				final String contents = Files.readString(publicRoutesFile, StandardCharsets.UTF_8);
+				// Wait for every simulator's first catalog so valid IDs are not mistaken for unknown IDs.
+				if (catalogExports.stream().allMatch(world -> world.received)) {
+					next = BlueMapRoutePolicy.parse(contents, routeCatalogs);
+				}
+				lastPolicyError = "";
+			} catch (IOException | RuntimeException e) {
+				final String message = e.getMessage();
+				if (!java.util.Objects.equals(lastPolicyError, message)) {
+					Init.LOGGER.warn("[MTR BlueMap] No routes published: {}", message);
+					lastPolicyError = message;
+				}
+			}
+			if (!next.fingerprint().equals(publication.policy.fingerprint())) {
+				advancePublication(next, session);
+			}
+		}
+
+		private void advancePublication(BlueMapRoutePolicy policy, Session current) {
+			publication = new Publication(publication.revision + 1, policy);
+			if (current != null) {
+				current.needsReset = true;
+				for (WorldExport world : current.worlds) {
+					world.mailbox.reset(publication.revision);
+					world.nextInfrastructure = 0;
+				}
+			}
+		}
+
+		private void stamp(JsonObject object, Publication policy) {
+			object.addProperty("publicationRevision", processId + ":" + policy.revision);
+		}
+
+		private void writeEmpty(Session current) throws IOException {
+			final java.util.Set<String> prefixes = new java.util.LinkedHashSet<>();
+			current.worlds.forEach(world -> prefixes.add(world.prefix));
+			clearPublicSnapshots(current.root, prefixes, processId + ":" + publication.revision, System.currentTimeMillis());
 		}
 
 		private Session connect(Object api) throws ReflectiveOperationException, IOException {
@@ -297,16 +505,16 @@ public final class BlueMapLiveBridge {
 
 		private void clear(Session session) throws IOException {
 			session.active = false;
-			atomicWrite(session.root.resolve("index.json"), index().toString());
-			for (WorldExport world : session.worlds) {
-				world.vehicles.set(null);
-				world.infrastructure.set(null);
-				atomicWrite(session.root.resolve(world.prefix + "-vehicles.json"), BlueMapSnapshot.empty("vehicles", System.currentTimeMillis()).toString());
-				final JsonObject infrastructure = BlueMapSnapshot.empty("rails", System.currentTimeMillis());
-				infrastructure.add("routes", new org.mtr.libraries.com.google.gson.JsonArray());
-				infrastructure.add("stations", new org.mtr.libraries.com.google.gson.JsonArray());
-				atomicWrite(session.root.resolve(world.prefix + "-rails.json"), infrastructure.toString());
+			advancePublication(publication.policy, session);
+			IOException failure = writeOrCollect(session.root.resolve("index.json"), index().toString(), null);
+			try {
+				writeEmpty(session);
+			} catch (IOException e) {
+				if (failure == null) failure = e;
+				else failure.addSuppressed(e);
 			}
+			if (failure != null) throw failure;
+			session.needsReset = false;
 		}
 
 		private void close() {
@@ -341,6 +549,7 @@ public final class BlueMapLiveBridge {
 		private final Path root;
 		private final List<WorldExport> worlds = new ArrayList<>();
 		private volatile boolean active;
+		private boolean needsReset;
 		private long nextCatalog;
 
 		private Session(Object api, Path root) {
@@ -354,13 +563,50 @@ public final class BlueMapLiveBridge {
 		private final String prefix;
 		private final AtomicBoolean pending = new AtomicBoolean();
 		private final AtomicBoolean failed = new AtomicBoolean();
-		private final AtomicReference<JsonObject> vehicles = new AtomicReference<>();
-		private final AtomicReference<JsonObject> infrastructure = new AtomicReference<>();
-		private volatile long nextInfrastructure;
+		private final AtomicBoolean arrivalsFailed = new AtomicBoolean();
+		private final BlueMapSnapshotMailbox<SnapshotPair> mailbox = new BlueMapSnapshotMailbox<>();
+		private long nextInfrastructure; // IO worker only
+		private JsonObject arrivals; // Simulator thread only
+		private long arrivalsRevision = -1;
+		private long nextArrivals;
 
 		private WorldExport(Simulator simulator) {
 			this.simulator = simulator;
 			prefix = UUID.nameUUIDFromBytes(simulator.dimension.getBytes(StandardCharsets.UTF_8)).toString();
+		}
+	}
+
+	private static final class CatalogExport {
+		private final Simulator simulator;
+		private final AtomicBoolean pending = new AtomicBoolean();
+		private final AtomicReference<JsonObject> latest = new AtomicReference<>();
+		private long nextCapture;
+		private boolean received;
+
+		private CatalogExport(Simulator simulator) {
+			this.simulator = simulator;
+		}
+	}
+
+	private static final class Publication {
+		private final long revision;
+		private final BlueMapRoutePolicy policy;
+
+		private Publication(long revision, BlueMapRoutePolicy policy) {
+			this.revision = revision;
+			this.policy = policy;
+		}
+	}
+
+	private static final class SnapshotPair {
+		private final long revision;
+		private final JsonObject vehicles;
+		private final JsonObject infrastructure;
+
+		private SnapshotPair(long revision, JsonObject vehicles, JsonObject infrastructure) {
+			this.revision = revision;
+			this.vehicles = vehicles;
+			this.infrastructure = infrastructure;
 		}
 	}
 }
