@@ -3,13 +3,14 @@
 <title>MTR · BlueMap synthetic visual QA</title>
 <style>
 html,body,#map { margin:0;width:100%;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#d8e0dd }
-.qa {position:fixed;left:18px;top:18px;z-index:30;padding:12px 16px;background:#fffffff0;border:1px solid #adb9c2;border-radius:10px;color:#233346;max-width:430px;box-shadow:0 3px 14px #0002}
+.qa {position:fixed;left:18px;top:18px;z-index:30;padding:12px 16px;background:#fffffff0;border:1px solid #dbe3eb;border-radius:14px;color:#233346;max-width:430px;box-shadow:0 3px 14px #0002}
 .qa strong {display:block;margin-bottom:5px}.qa p {margin:6px 0;font-size:13px}.qa button {padding:6px 9px;margin:3px;border:1px solid #a0acb8;border-radius:5px;background:white;cursor:pointer}
 .qa .note {font-size:11px;color:#536879}.bm-marker-html {position:relative}.bm-marker-html button:focus-visible {outline:3px solid #ffb400;outline-offset:2px}
+@media(max-width:600px){.qa{left:10px;top:8px;max-width:calc(100vw - 20px);padding:7px 10px}.qa p,.qa .note{display:none}.qa strong{font-size:11px}.qa button{font-size:10px;padding:4px;margin:1px}}
 </style>
 <div id="map"></div>
 <div class="qa"><strong>MTR × BlueMap · 합성 데이터 검증</strong><p>마우스로 회전·확대합니다. 실제 서버 데이터가 아닙니다.</p>
-<button id="close">근거리 3D</button><button id="city">도시 전체</button><button id="pause">서버 응답 중단</button><button id="switch">지도 전환</button>
+<button id="close">근거리 3D</button><button id="city">도시 전체</button><button id="pause">서버 응답 중단</button><button id="switch">지도 전환</button><button id="public">공개 노선 비우기</button>
 <p class="note">실제 BlueMap HtmlMarker/CSS2DRenderer와 로컬 Three.js 사용 · 외부 네트워크 없음</p></div>
 <script type="module">
 import * as THREE from '/vendor/three.js';
@@ -33,24 +34,24 @@ const viewer = {rootElement:root,renderer,camera,markers,map:{data:{id:'demo'}},
 window.bluemap = {mapViewer:viewer,events};
 const ellipse = (t, offset=0)=>[Math.cos(t)*230,2+Math.sin(t*2)*3,Math.sin(t)*145+offset];
 const points = Array.from({length:161},(_,i)=>ellipse(i/160*Math.PI*2));
-const branch = Array.from({length:101},(_,i)=>[-600+i*12,-12+Math.sin(i/100*Math.PI)*20,-180+i*3.6]);
+const branch = Array.from({length:101},(_,i)=>[-600+i*12,-12+Math.sin(i/100*Math.PI)*20,(-830+i*12)*0.3]);
 const rails={schema:1,rails:[{id:'loop',points},{id:'branch',points:branch}],routes:[
-{id:'blue',name:'1호선',color:'#317fce',paths:[points],stations:['a','b','c','d']},
-{id:'orange',name:'2호선',color:'#f18c35',paths:[points.slice(0,50)],stations:['a','b']},
-{id:'green',name:'3호선',color:'#3ba879',paths:[branch],stations:['e','f','g']}],stations:[
-{id:'a',name:'중앙역',position:ellipse(0),routes:['blue','orange']},{id:'b',name:'시청역',position:ellipse(Math.PI/2),routes:['blue','orange']},
-{id:'c',name:'강변역',position:ellipse(Math.PI),routes:['blue']},{id:'d',name:'공원역',position:ellipse(Math.PI*1.5),routes:['blue']},
-{id:'e',name:'서부역',position:branch[0],routes:['green']},{id:'f',name:'환승 <역>',position:branch[50],routes:['green']},{id:'g',name:'동부역',position:branch[100],routes:['green']}]};
-let paused=false, frozen=null;
+{id:'group:jungang',name:'중앙선',color:'#317fce',paths:[points],stations:['a','b','c','d'],services:[{id:'jungang-local',name:'일반',color:'#317fce'},{id:'jungang-express',name:'급행',color:'#317fce'}]},
+{id:'group:coast',name:'해안선',color:'#3ba879',paths:[branch],stations:['a','e','f','g'],services:[{id:'coast-local',name:'일반',color:'#3ba879'}]}],stations:[
+{id:'a',name:'중앙역',position:ellipse(0),routes:['group:jungang','group:coast'],services:[{id:'jungang-local',name:'중앙선 일반',routeId:'group:jungang'},{id:'jungang-express',name:'중앙선 급행',routeId:'group:jungang'},{id:'coast-local',name:'해안선 일반',routeId:'group:coast'}]},
+{id:'b',name:'시청역',position:ellipse(Math.PI/2),routes:['group:jungang'],services:[{id:'jungang-local',name:'일반',routeId:'group:jungang'},{id:'jungang-express',name:'급행',routeId:'group:jungang'}]},
+{id:'c',name:'강변역',position:ellipse(Math.PI),routes:['group:jungang']},{id:'d',name:'공원역',position:ellipse(Math.PI*1.5),routes:['group:jungang']},
+{id:'e',name:'서부역',position:branch[0],routes:['group:coast']},{id:'f',name:'환승 <역>',position:branch[50],routes:['group:coast']},{id:'g',name:'동부역',position:branch[100],routes:['group:coast']}]};
+let paused=false, frozen=null, emptyPublic=false, revision=1;
 const start=Date.now();
-function vehicles(){const time=(Date.now()-start)/1000;return {schema:1,timestamp:Date.now(),vehicles:[0,1,2,3].map((n)=>({id:`train-${n}`,routeId:n%2?'orange':'blue',routeName:n%2?'2호선':'1호선',color:n%2?'#f18c35':'#317fce',cars:Array.from({length:4},(_,i)=>{const t=time*0.026+n*Math.PI/2-i*0.092;const p=ellipse(t),next=ellipse(t+0.001);const dx=next[0]-p[0],dy=next[1]-p[1],dz=next[2]-p[2];return{id:n===3?'custom-unknown':'demo-model',position:p,yaw:Math.atan2(dx,dz),pitch:-Math.atan2(dy,Math.hypot(dx,dz)),length:18,width:3.1}})}))};}
+function vehicles(){const time=(Date.now()-start)/1000;return {schema:1,publicationRevision:`demo-${revision}`,timestamp:Date.now(),vehicles:emptyPublic?[]:[0,1,2,3].map((n)=>({id:`train-${n}`,routeId:'group:jungang',routeName:'중앙선',sourceRouteId:n%2?'jungang-express':'jungang-local',serviceName:n%2?'급행':'일반',color:'#317fce',cars:Array.from({length:4},(_,i)=>{const t=time*0.026+n*Math.PI/2-i*0.092;const p=ellipse(t),next=ellipse(t+0.001);const dx=next[0]-p[0],dy=next[1]-p[1],dz=next[2]-p[2];return{id:n===3?'custom-unknown':'demo-model',position:p,yaw:Math.atan2(dx,dz),pitch:-Math.atan2(dy,Math.hypot(dx,dz)),length:18,width:3.1}})})),arrivals:emptyPublic?[]:['a','b'].flatMap(stationId=>[0,1,2].map(n=>({stationId,platformId:`${n+1}`,routeId:n===2?'group:coast':'group:jungang',sourceRouteId:n===2?'coast-local':n?'jungang-express':'jungang-local',serviceName:n===1?'급행':'일반',destination:n===2?'동부역':'강변역',arrivalTime:start+Math.floor(time/360)*360000+[-10000,95000,210000][n],departureTime:start+Math.floor(time/360)*360000+[40000,125000,240000][n],vehicleId:`arrival-${n}`,realtime:n!==2,terminating:false})))};}
 const nativeFetch=window.fetch.bind(window);
 window.fetch=async(url,options)=>{if(!String(url).includes('/mtr-live/'))return nativeFetch(url,options);let data;
 if(String(url).endsWith('index.json'))data={schema:1,maps:{demo:{worldId:'synthetic',vehicles:'mtr-live/demo-vehicles.json',rails:'mtr-live/demo-rails.json'},other:{worldId:'empty',vehicles:'mtr-live/other-vehicles.json',rails:'mtr-live/other-rails.json'}},catalog:'mtr-live/catalog.json'};
 else if(String(url).endsWith('catalog.json'))data={schema:1,vehicles:{'demo-model':{name:'통근형 전동차',length:18,width:3.1}}};
-else if(String(url).includes('other-rails'))data={schema:1,rails:[],routes:[],stations:[]};
-else if(String(url).includes('other-vehicles'))data={schema:1,timestamp:Date.now(),vehicles:[]};
-else if(String(url).endsWith('rails.json'))data=rails;
+else if(String(url).includes('other-rails'))data={schema:1,publicationRevision:'other-1',rails:[],routes:[],stations:[]};
+else if(String(url).includes('other-vehicles'))data={schema:1,publicationRevision:'other-1',timestamp:Date.now(),vehicles:[],arrivals:[]};
+else if(String(url).endsWith('rails.json'))data=emptyPublic?{schema:1,publicationRevision:`demo-${revision}`,rails:[],routes:[],stations:[]}:{...rails,publicationRevision:`demo-${revision}`};
 else data=paused?frozen:vehicles();
 return {ok:true,json:async()=>data};};
 const script=document.createElement('script');script.src='/mtr-live.js';document.body.append(script);
@@ -61,4 +62,5 @@ document.getElementById('close').onclick=()=>{controls.target.set(100,0,75);came
 document.getElementById('city').onclick=()=>{controls.target.set(0,0,0);camera.position.set(550,1400,1300);controls.update()};
 document.getElementById('pause').onclick=event=>{paused=!paused;frozen=vehicles();event.target.textContent=paused?'서버 응답 재개':'서버 응답 중단'};
 document.getElementById('switch').onclick=()=>{viewer.map={data:{id:viewer.map.data.id==='demo'?'other':'demo'}};events.dispatchEvent(new CustomEvent('bluemapMapChanged',{detail:{map:viewer.map}}))};
+document.getElementById('public').onclick=event=>{emptyPublic=!emptyPublic;revision++;event.target.textContent=emptyPublic?'공개 노선 복원':'공개 노선 비우기'};
 </script></html>

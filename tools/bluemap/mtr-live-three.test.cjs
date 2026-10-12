@@ -32,9 +32,10 @@ test('real Three r147 renderer builds dimensioned cars, sloped instances, route 
     assert.equal(overlay.trainGroup.visible,false);
     assert.equal(overlay.cars.size,0);
     viewer.map = {data:{id:'b'}};
-    overlay.detail = {textContent:'Previous world station'};
+    overlay.detail = {textContent:'Previous world station',replaceChildren(){this.textContent=''},remove(){}};
     overlay.switchMap();
     assert.equal(overlay.detail.textContent,'');
+    assert.equal(overlay.detail.hidden,true);
     assert.equal(overlay.loadedChunks.size,0);
     assert.equal(overlay.routesGroup.children.length,0);
     overlay.dispose();
