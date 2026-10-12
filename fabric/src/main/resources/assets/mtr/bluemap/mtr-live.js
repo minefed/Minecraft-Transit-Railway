@@ -30,7 +30,9 @@
                     key: `${vehicle.id}:${index}`, vehicleId: vehicle.id, index,
                     routeId: typeof vehicle.routeId === "string" ? vehicle.routeId : "",
                     routeName: typeof vehicle.routeName === "string" ? vehicle.routeName : "",
+                    serviceId: typeof vehicle.serviceId === "string" ? vehicle.serviceId : "",
                     serviceName: typeof vehicle.serviceName === "string" ? vehicle.serviceName : "",
+                    showServiceName: vehicle.showServiceName !== false,
                     sourceRouteId: typeof vehicle.sourceRouteId === "string" ? vehicle.sourceRouteId : "",
                     carCount: vehicle.cars.length,
                     color: color(vehicle.color),
@@ -120,7 +122,7 @@
         const result = new Map();
         for (const service of Array.isArray(services) ? services : []) {
             if (!service || typeof service.id !== "string" || result.has(service.id)) continue;
-            result.set(service.id, { id: service.id, name: typeof service.name === "string" ? service.name : "", routeId: typeof service.routeId === "string" ? service.routeId : "", color: color(service.color) });
+            result.set(service.id, { id: service.id, name: typeof service.name === "string" ? service.name : "", showName: service.showName !== false, routeId: typeof service.routeId === "string" ? service.routeId : "", color: color(service.color) });
         }
         return [...result.values()];
     }
@@ -134,7 +136,9 @@
             const key = `${arrival.vehicleId || ""}:${arrival.platformId || ""}:${arrival.routeId || ""}:${arrival.sourceRouteId || ""}:${arrival.arrivalTime}`;
             if (!result.has(key)) result.set(key, {
                 ...arrival,
+                serviceId: typeof arrival.serviceId === "string" ? arrival.serviceId : "",
                 serviceName: typeof arrival.serviceName === "string" ? arrival.serviceName : "",
+                showServiceName: arrival.showServiceName !== false,
                 destination: typeof arrival.destination === "string" ? arrival.destination : "",
                 minutes: Math.max(0, Math.ceil((arrival.arrivalTime - now) / 60000)), soon: arrival.arrivalTime - now < 30000,
                 atStation: arrival.arrivalTime <= now, terminating: arrival.terminating === true, realtime: arrival.realtime !== false
@@ -855,7 +859,7 @@
             const routes = stationRoutes(station, this.routeCatalog);
             this.showDetail({ title: station.name || "철도역", kind: routes.length > 1 ? "환승역" : "철도역", description: routes.length > 1 ? `${routes.length}개 노선에서 이용할 수 있습니다` : "운행 노선", routes, symbol: routes.length > 1 ? "transfer" : "station" });
             if (!this.detail) return;
-            const services = uniqueServices(station.services).filter(service => !service.routeId || this.routeCatalog.has(service.routeId));
+            const services = uniqueServices(station.services).filter(service => service.showName && (!service.routeId || this.routeCatalog.has(service.routeId)));
             if (services.length) this.detail.appendChild(this.serviceBadges(services));
             this.selectedStation = station;
             this.arrivalsElement = document.createElement("div"); this.arrivalsElement.className = "mtr-arrivals";
@@ -866,12 +870,13 @@
         showTrainDetail(car) {
             const route = this.routeCatalog.get(car.routeId);
             const model = catalogEntry(this.catalog, car).name;
-            this.showDetail({ title: car.routeName || "운행 열차", kind: "실시간 열차", description: [car.serviceName, model, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · "), routes: route ? [route] : [], symbol: "train" });
+            this.showDetail({ title: car.routeName || "운행 열차", kind: "실시간 열차", description: [car.showServiceName === false ? "" : car.serviceName, model, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · "), routes: route ? [route] : [], symbol: "train" });
         }
 
         serviceBadges(services) {
             const element = document.createElement("div"); element.className = "mtr-services";
             for (const service of uniqueServices(services)) {
+                if (!service.showName) continue;
                 const badge = document.createElement("span"); badge.className = "mtr-service"; badge.textContent = service.name; element.appendChild(badge);
             }
             return element;
@@ -882,7 +887,7 @@
             const now = this.now(), stale = this.buffer.isStale(now) || now - this.arrivalsFreshAt > STALE_MS;
             const serverNow = this.buffer.offset === null ? Date.now() : now - this.buffer.offset;
             const arrivals = upcomingArrivals(this.arrivals, this.selectedStation.id, serverNow, stale).filter(arrival => this.routeCatalog.has(arrival.routeId));
-            const signature = JSON.stringify([stale, arrivals.map(arrival => [arrival.vehicleId, arrival.arrivalTime, arrival.minutes, arrival.soon, arrival.atStation, arrival.terminating, arrival.realtime, arrival.destination, arrival.serviceName, arrival.routeId])]);
+            const signature = JSON.stringify([stale, arrivals.map(arrival => [arrival.vehicleId, arrival.arrivalTime, arrival.minutes, arrival.soon, arrival.atStation, arrival.terminating, arrival.realtime, arrival.destination, arrival.serviceName, arrival.showServiceName, arrival.routeId])]);
             if (signature === this.arrivalsSignature) return;
             this.arrivalsSignature = signature; this.arrivalsElement.replaceChildren();
             const title = document.createElement("h3"); title.textContent = "곧 도착하는 열차"; this.arrivalsElement.appendChild(title);
@@ -895,7 +900,7 @@
                 const route = this.routeCatalog.get(arrival.routeId), row = document.createElement("div"), line = document.createElement("span"), copy = document.createElement("div"), heading = document.createElement("div"), meta = document.createElement("div"), time = document.createElement("div"), minutes = document.createElement("div"), clock = document.createElement("div");
                 row.className = "mtr-arrival-row"; line.className = "mtr-arrival-line"; line.style.setProperty("--mtr-route", route.color);
                 copy.className = "mtr-arrival-copy"; heading.className = "mtr-arrival-heading"; heading.textContent = arrival.destination ? `${arrival.destination} 방면` : route.name;
-                meta.className = "mtr-arrival-meta"; meta.textContent = [route.name, arrival.serviceName, arrival.realtime ? "" : "시간표 예정"].filter(Boolean).join(" · ");
+                meta.className = "mtr-arrival-meta"; meta.textContent = [route.name, arrival.showServiceName ? arrival.serviceName : "", arrival.realtime ? "" : "시간표 예정"].filter(Boolean).join(" · ");
                 time.className = "mtr-arrival-time"; minutes.className = "mtr-arrival-minutes";
                 minutes.textContent = arrival.atStation ? (arrival.realtime ? arrival.terminating ? "종착" : "정차 중" : "출발 예정") : arrival.soon ? "곧 도착" : `${arrival.minutes}분`;
                 clock.className = "mtr-arrival-clock"; clock.textContent = new Date(arrival.arrivalTime).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -917,7 +922,7 @@
                 row.className = "mtr-route-row"; swatch.className = "mtr-route-symbol"; swatch.style.setProperty("--mtr-route", route.color);
                 swatch.appendChild(icon("train")); name.className = "mtr-route-name"; name.textContent = route.name;
                 meta.className = "mtr-route-meta"; meta.textContent = `${route.stations.length}개 역`;
-                label.className = "mtr-route-label"; label.appendChild(name); if (route.services.length) label.appendChild(this.serviceBadges(route.services));
+                label.className = "mtr-route-label"; label.appendChild(name); if (route.services.some(service => service.showName)) label.appendChild(this.serviceBadges(route.services));
                 row.append(swatch, label, meta);
                 this.routeLegend.appendChild(row);
             }

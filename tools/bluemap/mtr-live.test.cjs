@@ -147,6 +147,33 @@ test('grouped routes and station badges deduplicate IDs and never invent private
     assert.equal(uniqueServices(undefined).length,0);
 });
 
+test('shared service IDs deduplicate independently of source routes and name visibility defaults to true', () => {
+    const services = uniqueServices([
+        {id:'service:central:local',name:'완행',sourceRouteId:'a'},
+        {id:'service:central:local',name:'완행',sourceRouteId:'b'},
+        {id:'service:central:express',name:'급행',showName:false}
+    ]);
+    assert.equal(services.length,2);
+    assert.equal(services[0].showName,true);
+    assert.equal(services[1].showName,false);
+    const cars = normalizeSnapshot(snapshot(1,[
+        vehicle(0,0,'known',{serviceId:'service:central:local',serviceName:'완행'}),
+        {...vehicle(20,0,'known',{serviceId:'service:central:express',serviceName:'급행',showServiceName:false}),id:'fleet-2'}
+    ])).cars;
+    assert.equal(cars.size,2);
+    assert.equal(cars.get('fleet-1:0').serviceId,'service:central:local');
+    assert.equal(cars.get('fleet-1:0').showServiceName,true);
+    assert.equal(cars.get('fleet-2:0').showServiceName,false);
+    const arrivals = upcomingArrivals([
+        {stationId:'a',arrivalTime:1000,vehicleId:'one',serviceId:'service:central:local',serviceName:'완행'},
+        {stationId:'a',arrivalTime:2000,vehicleId:'two',serviceId:'service:central:express',serviceName:'급행',showServiceName:false}
+    ],'a',0,false);
+    assert.equal(arrivals.length,2);
+    assert.equal(arrivals[0].serviceId,'service:central:local');
+    assert.equal(arrivals[0].showServiceName,true);
+    assert.equal(arrivals[1].showServiceName,false);
+});
+
 test('ETA keeps trains until predicted departure, excludes past forecasts and respects stale data', () => {
     const data = [
         {stationId:'a',arrivalTime:900,departureTime:1200,vehicleId:'stopped',realtime:true},
@@ -224,6 +251,67 @@ class ElementDouble {
     removeEventListener(type) { this.listeners.delete(type); }
     remove() { this.removed=true; }
 }
+
+function withDocument(callback) {
+    const previous=global.document;
+    global.document={createElement:tag=>new ElementDouble(tag),createElementNS:(_namespace,tag)=>new ElementDouble(tag),createTextNode:text=>{const node=new ElementDouble('#text');node.textContent=text;return node}};
+    try { callback(); } finally {global.document=previous;}
+}
+
+test('hidden service names disappear from legend, station and train cards without hiding their route or arrival', () => withDocument(() => {
+    const services=[
+        {id:'service:central:local',name:'<완행>',routeId:'group:central'},
+        {id:'service:central:local',name:'<완행>',routeId:'group:central'},
+        {id:'service:central:express',name:'숨긴 급행',routeId:'group:central',showName:false}
+    ];
+    const routes=[{id:'group:central',name:'중앙선',color:'#123456',stations:['a'],services}];
+    const overlay=Object.assign(Object.create(Overlay.prototype),{
+        detail:new ElementDouble('section'),routeLegend:new ElementDouble('ul'),routeCatalog:publicRoutes(routes),
+        now:()=>1000,buffer:{offset:-99000,isStale:()=>false},arrivalsFreshAt:1000,
+        arrivals:[{stationId:'a',routeId:'group:central',serviceId:'service:central:express',serviceName:'숨긴 급행',showServiceName:false,arrivalTime:220000,destination:'강변역',vehicleId:'train'}]
+    });
+    overlay.updateRouteLegend(routes);
+    assert.ok(overlay.routeLegend.textContent.includes('중앙선'));
+    assert.equal(overlay.routeLegend.textContent.split('<완행>').length-1,1);
+    assert.ok(!overlay.routeLegend.textContent.includes('숨긴 급행'));
+    overlay.showStationDetail({id:'a',name:'중앙역',routes:['group:central'],services});
+    assert.equal(overlay.detail.textContent.split('<완행>').length-1,1);
+    assert.ok(!overlay.detail.textContent.includes('숨긴 급행'));
+    assert.ok(overlay.detail.textContent.includes('강변역 방면'));
+    assert.ok(overlay.detail.textContent.includes('2분'));
+    const car=normalizeSnapshot(snapshot(1,[vehicle(0,0,'known',{routeId:'group:central',routeName:'중앙선',serviceId:'service:central:express',serviceName:'숨긴 급행',showServiceName:false})])).cars.get('fleet-1:0');
+    overlay.showTrainDetail(car);
+    assert.ok(overlay.detail.textContent.includes('중앙선'));
+    assert.ok(overlay.detail.textContent.includes('known'));
+    assert.ok(!overlay.detail.textContent.includes('숨긴 급행'));
+    overlay.showTrainDetail({...car,serviceName:'호환 완행',showServiceName:undefined});
+    assert.ok(overlay.detail.textContent.includes('호환 완행'));
+    const hiddenServices=services.map(service=>({...service,showName:false}));
+    overlay.updateRouteLegend([{...routes[0],services:hiddenServices}]);
+    assert.ok(overlay.routeLegend.textContent.includes('중앙선'));
+    assert.ok(!overlay.routeLegend.textContent.includes('<완행>'));
+    assert.ok(!overlay.routeLegend.children[0].children[1].children.some(element=>element.className==='mtr-services'));
+    overlay.showStationDetail({id:'a',name:'중앙역',routes:['group:central'],services:hiddenServices});
+    assert.ok(!overlay.detail.children.some(element=>element.className==='mtr-services'));
+}));
+
+test('arrival name visibility changes invalidate rendered text while keeping the same train and ETA', () => withDocument(() => {
+    const arrival={stationId:'a',routeId:'group:central',serviceId:'service:central:express',serviceName:'특급',arrivalTime:220000,destination:'강변역',vehicleId:'train'};
+    const overlay=Object.assign(Object.create(Overlay.prototype),{
+        detail:new ElementDouble('section'),routeCatalog:publicRoutes([{id:'group:central',name:'중앙선'}]),
+        now:()=>1000,buffer:{offset:-99000,isStale:()=>false},arrivalsFreshAt:1000,arrivals:[arrival]
+    });
+    overlay.showStationDetail({id:'a',name:'중앙역',routes:['group:central']});
+    assert.ok(overlay.arrivalsElement.textContent.includes('특급'));
+    const before=overlay.arrivalsSignature;
+    overlay.arrivals=[{...arrival,showServiceName:false}];overlay.updateArrivals();
+    assert.notEqual(overlay.arrivalsSignature,before);
+    assert.ok(!overlay.arrivalsElement.textContent.includes('특급'));
+    assert.ok(overlay.arrivalsElement.textContent.includes('중앙선'));
+    assert.ok(overlay.arrivalsElement.textContent.includes('2분'));
+    overlay.arrivals=[{...arrival,showServiceName:true}];overlay.updateArrivals();
+    assert.ok(overlay.arrivalsElement.textContent.includes('특급'));
+}));
 
 test('floating card toggles accessibly, has no vehicle select, and grouped names remain inert text', () => {
     const previous=global.document,created=[];

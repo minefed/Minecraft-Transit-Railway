@@ -48,12 +48,12 @@ final class BlueMapRoutePolicy {
 			final Map<String, DisplayRoute> routes = new LinkedHashMap<>();
 			for (String routeId : ids(configuration, "routes", false)) {
 				final JsonObject source = requireRoute(available, routeId, worldId);
-				put(routes, routeId, new DisplayRoute(routeId, source.get("name").getAsString(), source.get("color").getAsString(), false));
+				put(routes, routeId, new DisplayRoute(routeId, source.get("name").getAsString(), source.get("color").getAsString(), false, Collections.emptyMap(), Collections.emptyMap()));
 			}
 			final Set<String> groups = new HashSet<>();
 			for (JsonElement element : array(configuration, "groups", false)) {
 				final JsonObject group = object(element, "group");
-				keys(group, "id", "name", "color", "routeIds");
+				keys(group, "id", "name", "color", "routeIds", "routeNames", "services");
 				final String id = string(group.get("id"), "group.id");
 				if (!id.matches("[a-z0-9][a-z0-9_-]{0,63}") || !groups.add(id)) {
 					throw invalid("invalid or duplicate group id: " + id);
@@ -62,15 +62,62 @@ final class BlueMapRoutePolicy {
 				if (name.trim().isEmpty() || name.length() > 256) {
 					throw invalid("group name must contain 1-256 characters");
 				}
-				final List<String> members = ids(group, "routeIds", true);
+				final List<String> members = ids(group, "routeIds", false);
+				final Map<String, String> routeNames = new LinkedHashMap<>();
+				if (group.has("routeNames")) {
+					for (Map.Entry<String, JsonElement> entry : object(group.get("routeNames"), "group.routeNames").entrySet()) {
+						if (!members.contains(entry.getKey())) {
+							throw invalid("routeNames key must be a member of routeIds: " + entry.getKey());
+						}
+						final String routeName = string(entry.getValue(), "group.routeNames." + entry.getKey());
+						if (routeName.trim().isEmpty() || routeName.length() > 256) {
+							throw invalid("routeNames value must contain 1-256 characters: " + entry.getKey());
+						}
+						routeNames.put(entry.getKey(), routeName);
+					}
+				}
+				final Map<String, Service> services = new LinkedHashMap<>();
+				final Set<String> serviceIds = new HashSet<>();
+				for (JsonElement serviceElement : array(group, "services", false)) {
+					final JsonObject service = object(serviceElement, "service");
+					keys(service, "id", "name", "routeIds", "showName");
+					final String serviceId = string(service.get("id"), "service.id");
+					if (!serviceId.matches("[a-z0-9][a-z0-9_-]{0,63}") || !serviceIds.add(serviceId)) {
+						throw invalid("invalid or duplicate service id: " + serviceId);
+					}
+					final String serviceName = string(service.get("name"), "service.name");
+					if (serviceName.trim().isEmpty() || serviceName.length() > 256) {
+						throw invalid("service name must contain 1-256 characters");
+					}
+					boolean showName = true;
+					if (service.has("showName")) {
+						final JsonElement flag = service.get("showName");
+						if (!flag.isJsonPrimitive() || !flag.getAsJsonPrimitive().isBoolean()) {
+							throw invalid("service.showName must be a boolean");
+						}
+						showName = flag.getAsBoolean();
+					}
+					final List<String> serviceMembers = ids(service, "routeIds", true);
+					if (serviceMembers.isEmpty()) {
+						throw invalid("service must have routeIds: " + serviceId);
+					}
+					final Service displayService = new Service("service:" + id + ":" + serviceId, serviceName, showName);
+					for (String member : serviceMembers) {
+						if (members.contains(member)) {
+							throw invalid("route occurs more than once in routeIds/services: " + member);
+						}
+						members.add(member);
+						services.put(member, displayService);
+					}
+				}
 				if (members.isEmpty()) {
-					throw invalid("group must have routeIds: " + id);
+					throw invalid("group must have routeIds or services: " + id);
 				}
 				final String color = group.has("color") ? string(group.get("color"), "group.color") : requireRoute(available, members.get(0), worldId).get("color").getAsString();
 				if (!color.matches("#[0-9a-fA-F]{6}")) {
 					throw invalid("group color must be #rrggbb: " + id);
 				}
-				final DisplayRoute display = new DisplayRoute("group:" + id, name, color.toLowerCase(Locale.ROOT), true);
+				final DisplayRoute display = new DisplayRoute("group:" + id, name, color.toLowerCase(Locale.ROOT), true, routeNames, services);
 				for (String member : members) {
 					requireRoute(available, member, worldId);
 					put(routes, member, display);
@@ -90,6 +137,10 @@ final class BlueMapRoutePolicy {
 				values.add(display.id);
 				values.add(display.name);
 				values.add(display.color);
+				final Service service = display.service(Long.parseUnsignedLong(sourceId), "");
+				values.add(service.id);
+				values.add(service.name);
+				values.add(service.showName);
 				routes.add(sourceId, values);
 			});
 			result.add(worldId, routes);
@@ -235,12 +286,38 @@ final class BlueMapRoutePolicy {
 		final String name;
 		final String color;
 		final boolean grouped;
+		private final Map<String, String> routeNames;
+		private final Map<String, Service> services;
 
-		private DisplayRoute(String id, String name, String color, boolean grouped) {
+		private DisplayRoute(String id, String name, String color, boolean grouped, Map<String, String> routeNames, Map<String, Service> services) {
 			this.id = id;
 			this.name = name;
 			this.color = color;
 			this.grouped = grouped;
+			this.routeNames = Collections.unmodifiableMap(new LinkedHashMap<>(routeNames));
+			this.services = Collections.unmodifiableMap(new LinkedHashMap<>(services));
+		}
+
+		String serviceName(long sourceId, String fallback) {
+			return service(sourceId, fallback).name;
+		}
+
+		Service service(long sourceId, String fallback) {
+			final String key = Long.toUnsignedString(sourceId);
+			final Service service = services.get(key);
+			return service == null ? new Service(key, routeNames.getOrDefault(key, fallback), true) : service;
+		}
+	}
+
+	static final class Service {
+		final String id;
+		final String name;
+		final boolean showName;
+
+		private Service(String id, String name, boolean showName) {
+			this.id = id;
+			this.name = name;
+			this.showName = showName;
 		}
 	}
 }

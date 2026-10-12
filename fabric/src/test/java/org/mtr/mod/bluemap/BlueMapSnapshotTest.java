@@ -130,7 +130,7 @@ public final class BlueMapSnapshotTest {
 
 	@Test
 	@SuppressWarnings("unchecked")
-	public void realCoreVehiclesExportWithoutAnyClientsIncludingParkedAndMultipleCars() throws Exception {
+	public void realCoreVehiclesHideDepotParkingButKeepStationDwellAndMultipleCarsWithoutClients() throws Exception {
 		final ClientData data = new ClientData();
 		final Route route = new Route(TransportMode.TRAIN, data);
 		route.setName("Public express");
@@ -163,19 +163,38 @@ public final class BlueMapSnapshotTest {
 			privateExtra.addProperty("thisRouteId", i == 2 ? 99 : 0);
 			final VehicleExtraData vehicleExtra = i < 2 ? extra : new VehicleExtraData(new JsonReader(privateExtra));
 			if (i >= 2) PathData.writePathCache(vehicleExtra.immutablePath, data, TransportMode.TRAIN);
-			final Vehicle vehicle = new Vehicle(vehicleExtra, siding, reader("{\"id\":" + (i + 1) + ",\"railProgress\":" + (i == 0 ? 80 : 130) + ",\"transportMode\":\"TRAIN\"}"), data);
+			final Vehicle vehicle = new Vehicle(vehicleExtra, siding, reader("{\"id\":" + (i + 1) + ",\"railProgress\":" + (i == 0 ? 100 : 130) + ",\"speed\":0,\"transportMode\":\"TRAIN\"}"), data);
 			assertEquals(i != 0, vehicle.getIsOnRoute());
+			assertFalse(vehicle.isMoving()); // Station dwell is not depot parking.
 			((Collection<Vehicle>) field.get(siding)).add(vehicle);
 		}
 		final JsonArray result = new BlueMapSnapshot().vehicles(data, 1234, selection(data, List.of(route), true)).getAsJsonArray("vehicles");
-		assertEquals(2, result.size());
+		assertEquals(1, result.size());
+		assertEquals("2", result.get(0).getAsJsonObject().get("id").getAsString());
 		assertEquals("group:line", result.get(0).getAsJsonObject().get("routeId").getAsString());
 		assertEquals("Public express", result.get(0).getAsJsonObject().get("serviceName").getAsString());
 		assertEquals(Long.toUnsignedString(route.getId()), result.get(0).getAsJsonObject().get("sourceRouteId").getAsString());
 		assertEquals("#123456", result.get(0).getAsJsonObject().get("color").getAsString());
 		assertEquals(2, result.get(0).getAsJsonObject().getAsJsonArray("cars").size());
-		assertEquals(24, result.get(1).getAsJsonObject().getAsJsonArray("cars").get(1).getAsJsonObject().get("length").getAsDouble());
+		assertEquals(24, result.get(0).getAsJsonObject().getAsJsonArray("cars").get(1).getAsJsonObject().get("length").getAsDouble());
 		assertTrue(new BlueMapSnapshot().vehicles(data, 1234, BlueMapRoutePolicy.WorldSelection.EMPTY).getAsJsonArray("vehicles").isEmpty());
+		final JsonArray renamed = new BlueMapSnapshot().vehicles(data, 1235, selection(data, List.of(route), true, Map.of(route.getId(), "급행"))).getAsJsonArray("vehicles");
+		assertEquals(1, renamed.size());
+		for (var element : renamed) {
+			final JsonObject train = element.getAsJsonObject();
+			assertEquals("급행", train.get("serviceName").getAsString());
+			assertEquals(Long.toUnsignedString(route.getId()), train.get("sourceRouteId").getAsString());
+			assertEquals("group:line", train.get("routeId").getAsString());
+			assertEquals("Combined line", train.get("routeName").getAsString());
+		}
+		assertEquals("Public express", route.getName());
+		final JsonArray explicit = new BlueMapSnapshot().vehicles(data, 1236, selection(data, service("rapid", "쾌속", false, route))).getAsJsonArray("vehicles");
+		assertEquals(1, explicit.size());
+		final JsonObject train = explicit.get(0).getAsJsonObject();
+		assertEquals("service:line:rapid", train.get("serviceId").getAsString());
+		assertEquals("쾌속", train.get("serviceName").getAsString());
+		assertFalse(train.get("showServiceName").getAsBoolean());
+		assertEquals(Long.toUnsignedString(route.getId()), train.get("sourceRouteId").getAsString());
 	}
 
 	@Test
@@ -235,6 +254,16 @@ public final class BlueMapSnapshotTest {
 		assertTrue(closed.getAsJsonArray("rails").isEmpty());
 		assertTrue(closed.getAsJsonArray("routes").isEmpty());
 		assertTrue(closed.getAsJsonArray("stations").isEmpty());
+		final JsonObject merged = BlueMapSnapshot.infrastructure(data, 102, selection(data, service("rapid", "쾌속", true, local, express)));
+		final JsonObject mergedGroup = merged.getAsJsonArray("routes").get(0).getAsJsonObject();
+		assertEquals(3, merged.getAsJsonArray("rails").size());
+		assertEquals(3, mergedGroup.getAsJsonArray("paths").size());
+		assertEquals(1, mergedGroup.getAsJsonArray("services").size());
+		for (var element : merged.getAsJsonArray("stations")) {
+			final JsonArray services = element.getAsJsonObject().getAsJsonArray("services");
+			assertEquals(1, services.size());
+			assertEquals("service:line:rapid", services.get(0).getAsJsonObject().get("id").getAsString());
+		}
 	}
 
 	@Test
@@ -273,6 +302,115 @@ public final class BlueMapSnapshotTest {
 	}
 
 	@Test
+	public void configuredServiceNamesReachRoutesStationsAndArrivalsWithoutRenamingThePrivateCatalog() {
+		final ClientData data = new ClientData();
+		final Station station = station(data, "Shared");
+		final Platform platform = platform(data, station, new Position(0, 64, 0), new Position(20, 64, 0));
+		final Route local = route(data, "MTR original local", platform);
+		final Route express = route(data, "MTR original express", platform);
+		final String originalCatalog = BlueMapSnapshot.routeCatalog(data, "minecraft/overworld").toString();
+		final var selected = selection(data, List.of(local, express), true, Map.of(express.getId(), "급행"));
+		final JsonObject infrastructure = BlueMapSnapshot.infrastructure(data, 100, selected);
+		final JsonObject group = infrastructure.getAsJsonArray("routes").get(0).getAsJsonObject();
+		assertEquals("Combined line", group.get("name").getAsString());
+		assertEquals("group:line", group.get("id").getAsString());
+		assertServiceNames(group.getAsJsonArray("services"), local, express);
+		final JsonObject exportedStation = infrastructure.getAsJsonArray("stations").get(0).getAsJsonObject();
+		assertServiceNames(exportedStation.getAsJsonArray("services"), local, express);
+		assertEquals(1, exportedStation.getAsJsonArray("routes").size());
+		final List<ArrivalResponse> responses = List.of(
+				new ArrivalResponse("Local destination", 11000, 11500, 0, true, 0, 0, local, platform),
+				new ArrivalResponse("Express destination", 12000, 12500, 0, false, 0, 0, express, platform)
+		);
+		final JsonArray arrivals = BlueMapSnapshot.filterArrivals(responses, Map.of(platform.getId(), platform), selected, 10000, 1000000);
+		assertEquals(2, arrivals.size());
+		assertEquals("MTR original local", arrivals.get(0).getAsJsonObject().get("serviceName").getAsString());
+		final JsonObject expressArrival = arrivals.get(1).getAsJsonObject();
+		assertEquals("급행", expressArrival.get("serviceName").getAsString());
+		assertEquals(Long.toUnsignedString(express.getId()), expressArrival.get("sourceRouteId").getAsString());
+		assertEquals("Combined line", expressArrival.get("routeName").getAsString());
+		assertEquals("group:line", expressArrival.get("routeId").getAsString());
+		assertEquals("Express destination", expressArrival.get("destination").getAsString());
+		assertEquals(originalCatalog, BlueMapSnapshot.routeCatalog(data, "minecraft/overworld").toString());
+		assertEquals("MTR original local", local.getName());
+		assertEquals("MTR original express", express.getName());
+	}
+
+	private static void assertServiceNames(JsonArray services, Route local, Route express) {
+		assertEquals(2, services.size());
+		final Map<String, JsonObject> byId = new java.util.HashMap<>();
+		services.forEach(service -> byId.put(service.getAsJsonObject().get("id").getAsString(), service.getAsJsonObject()));
+		assertEquals("MTR original local", byId.get(Long.toUnsignedString(local.getId())).get("name").getAsString());
+		assertEquals("급행", byId.get(Long.toUnsignedString(express.getId())).get("name").getAsString());
+		byId.values().forEach(service -> assertEquals("group:line", service.get("routeId").getAsString()));
+	}
+
+	@Test
+	public void explicitServicesDeduplicateStationBadgesWithoutCollapsingActualArrivals() {
+		final ClientData data = new ClientData();
+		final Station station = station(data, "Shared");
+		final Platform platform = platform(data, station, new Position(0, 64, 0), new Position(20, 64, 0));
+		final Route local = route(data, "Original local", platform);
+		final Route rapidA = route(data, "Original rapid A", platform);
+		final Route rapidB = route(data, "Original rapid B", platform);
+		final String originalCatalog = BlueMapSnapshot.routeCatalog(data, "minecraft/overworld").toString();
+		final var selected = selection(data, service("local", "일반", true, local), service("rapid", "쾌속", false, rapidA, rapidB));
+		final JsonObject infrastructure = BlueMapSnapshot.infrastructure(data, 100, selected);
+		assertEquals(2, infrastructure.getAsJsonArray("routes").get(0).getAsJsonObject().getAsJsonArray("services").size());
+		final JsonArray badges = infrastructure.getAsJsonArray("stations").get(0).getAsJsonObject().getAsJsonArray("services");
+		assertEquals(2, badges.size());
+		final Map<String, JsonObject> byId = new java.util.HashMap<>();
+		badges.forEach(badge -> byId.put(badge.getAsJsonObject().get("id").getAsString(), badge.getAsJsonObject()));
+		assertTrue(byId.get("service:line:local").get("showName").getAsBoolean());
+		assertFalse(byId.get("service:line:rapid").get("showName").getAsBoolean());
+		assertEquals("쾌속", byId.get("service:line:rapid").get("name").getAsString());
+		final List<ArrivalResponse> responses = List.of(
+				new ArrivalResponse("A destination", 11000, 11500, 0, true, 0, 0, rapidA, platform),
+				new ArrivalResponse("B destination", 12000, 12500, 0, false, 0, 0, rapidB, platform)
+		);
+		final JsonArray arrivals = BlueMapSnapshot.filterArrivals(responses, Map.of(platform.getId(), platform), selected, 10000, 1000000);
+		assertEquals(2, arrivals.size());
+		assertNotEquals(arrivals.get(0).getAsJsonObject().get("sourceRouteId"), arrivals.get(1).getAsJsonObject().get("sourceRouteId"));
+		for (var element : arrivals) {
+			final JsonObject arrival = element.getAsJsonObject();
+			assertEquals("service:line:rapid", arrival.get("serviceId").getAsString());
+			assertEquals("쾌속", arrival.get("serviceName").getAsString());
+			assertFalse(arrival.get("showServiceName").getAsBoolean());
+		}
+		assertEquals(originalCatalog, BlueMapSnapshot.routeCatalog(data, "minecraft/overworld").toString());
+	}
+
+	private static JsonObject service(String id, String name, boolean showName, Route... routes) {
+		final JsonObject service = new JsonObject();
+		service.addProperty("id", id);
+		service.addProperty("name", name);
+		service.addProperty("showName", showName);
+		final JsonArray ids = new JsonArray();
+		for (Route route : routes) ids.add(Long.toUnsignedString(route.getId()));
+		service.add("routeIds", ids);
+		return service;
+	}
+
+	private static BlueMapRoutePolicy.WorldSelection selection(ClientData data, JsonObject... services) {
+		final JsonArray entries = new JsonArray();
+		for (JsonObject service : services) entries.add(service);
+		final JsonObject group = new JsonObject();
+		group.addProperty("id", "line");
+		group.addProperty("name", "Combined line");
+		group.add("services", entries);
+		final JsonArray groups = new JsonArray();
+		groups.add(group);
+		final JsonObject settings = new JsonObject();
+		settings.add("groups", groups);
+		final JsonObject worlds = new JsonObject();
+		worlds.add("minecraft/overworld", settings);
+		final JsonObject policy = new JsonObject();
+		policy.addProperty("schema", 1);
+		policy.add("worlds", worlds);
+		return BlueMapRoutePolicy.parse(policy.toString(), Map.of("minecraft/overworld", BlueMapSnapshot.routeCatalog(data, "minecraft/overworld"))).world("minecraft/overworld");
+	}
+
+	@Test
 	public void publishedJsonReplacementIsCompleteAndLeavesNoTemporaryFile() throws Exception {
 		final Path file = directory.resolve("mtr-live/vehicles.json");
 		BlueMapLiveBridge.atomicWrite(file, "{\"vehicles\":[1,2,3]}");
@@ -295,6 +433,10 @@ public final class BlueMapSnapshotTest {
 	}
 
 	private static BlueMapRoutePolicy.WorldSelection selection(ClientData data, List<Route> routes, boolean group) {
+		return selection(data, routes, group, Map.of());
+	}
+
+	private static BlueMapRoutePolicy.WorldSelection selection(ClientData data, List<Route> routes, boolean group, Map<Long, String> routeNames) {
 		final JsonArray ids = new JsonArray();
 		routes.forEach(route -> ids.add(Long.toUnsignedString(route.getId())));
 		final JsonObject settings = new JsonObject();
@@ -304,6 +446,11 @@ public final class BlueMapSnapshotTest {
 			entry.addProperty("name", "Combined line");
 			entry.addProperty("color", "#123456");
 			entry.add("routeIds", ids);
+			if (!routeNames.isEmpty()) {
+				final JsonObject names = new JsonObject();
+				routeNames.forEach((id, name) -> names.addProperty(Long.toUnsignedString(id), name));
+				entry.add("routeNames", names);
+			}
 			final JsonArray groups = new JsonArray();
 			groups.add(entry);
 			settings.add("groups", groups);

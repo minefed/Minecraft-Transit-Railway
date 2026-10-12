@@ -44,6 +44,10 @@ final class BlueMapSnapshot {
 		for (Siding siding : simulator.sidings) {
 			for (Object value : (Iterable<?>) vehicles.get(siding)) {
 				final Vehicle vehicle = (Vehicle) value;
+				// Core keeps parked depot vehicles at their default position; station dwells remain on route.
+				if (!vehicle.getIsOnRoute()) {
+					continue;
+				}
 				final long sourceId = vehicle.vehicleExtraData.getThisRouteId() != 0 ? vehicle.vehicleExtraData.getThisRouteId() : vehicle.vehicleExtraData.getNextRouteId();
 				final BlueMapRoutePolicy.DisplayRoute display = selection.route(sourceId);
 				if (display == null) {
@@ -61,8 +65,11 @@ final class BlueMapSnapshot {
 					entry.addProperty("id", Long.toUnsignedString(vehicle.getId()));
 					addRoute(entry, vehicle.vehicleExtraData);
 					if (display.grouped) {
+						final BlueMapRoutePolicy.Service service = display.service(sourceId, entry.get("routeName").getAsString());
 						entry.addProperty("sourceRouteId", Long.toUnsignedString(sourceId));
-						entry.addProperty("serviceName", entry.get("routeName").getAsString());
+						entry.addProperty("serviceId", service.id);
+						entry.addProperty("serviceName", service.name);
+						entry.addProperty("showServiceName", service.showName);
 					}
 					entry.addProperty("routeId", display.id);
 					entry.addProperty("routeName", display.name);
@@ -112,15 +119,16 @@ final class BlueMapSnapshot {
 		final Map<String, Rail> selectedRails = new LinkedHashMap<>();
 		final Map<Long, Set<String>> stationRoutes = new LinkedHashMap<>();
 		final Map<Long, Map<Long, Platform>> stationPlatforms = new LinkedHashMap<>();
-		final Map<Long, Map<Long, JsonObject>> stationServices = new LinkedHashMap<>();
+		final Map<Long, Map<String, JsonObject>> stationServices = new LinkedHashMap<>();
 		for (Route route : simulator.routes) {
 			final BlueMapRoutePolicy.DisplayRoute display = selection.route(route.getId());
 			if (display == null) {
 				continue;
 			}
 			final RouteGeometry geometry = displayedRoutes.computeIfAbsent(display.id, ignored -> new RouteGeometry(display));
-			final JsonObject service = service(route, display.id);
-			geometry.services.put(route.getId(), service);
+			final JsonObject service = service(route, display);
+			final String serviceId = service.get("id").getAsString();
+			geometry.services.putIfAbsent(serviceId, service);
 			final List<Platform> platforms = new ArrayList<>();
 			for (RoutePlatformData platformData : route.getRoutePlatforms()) {
 				final Platform platform = platformData.getPlatform();
@@ -129,7 +137,7 @@ final class BlueMapSnapshot {
 					final long stationId = platform.area.getId();
 					stationRoutes.computeIfAbsent(stationId, ignored -> new LinkedHashSet<>()).add(display.id);
 					stationPlatforms.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()).put(platform.getId(), platform);
-					stationServices.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()).put(route.getId(), service);
+					stationServices.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()).putIfAbsent(serviceId, service);
 					geometry.stations.add(Long.toUnsignedString(stationId));
 				}
 			}
@@ -196,12 +204,14 @@ final class BlueMapSnapshot {
 		return result;
 	}
 
-	private static JsonObject service(Route route, String displayId) {
+	private static JsonObject service(Route route, BlueMapRoutePolicy.DisplayRoute display) {
+		final BlueMapRoutePolicy.Service label = display.service(route.getId(), route.getName());
 		final JsonObject service = new JsonObject();
-		service.addProperty("id", Long.toUnsignedString(route.getId()));
-		service.addProperty("name", route.getName());
+		service.addProperty("id", label.id);
+		service.addProperty("name", label.name);
+		service.addProperty("showName", label.showName);
 		service.addProperty("color", color(route.getColor()));
-		service.addProperty("routeId", displayId);
+		service.addProperty("routeId", display.id);
 		return service;
 	}
 
@@ -244,7 +254,10 @@ final class BlueMapSnapshot {
 			entry.addProperty("routeName", display.name);
 			entry.addProperty("color", display.color);
 			entry.addProperty("sourceRouteId", Long.toUnsignedString(arrival.getRouteId()));
-			entry.addProperty("serviceName", arrival.getRouteName());
+			final BlueMapRoutePolicy.Service service = display.service(arrival.getRouteId(), arrival.getRouteName());
+			entry.addProperty("serviceId", service.id);
+			entry.addProperty("serviceName", service.name);
+			entry.addProperty("showServiceName", service.showName);
 			entry.addProperty("destination", arrival.getDestination());
 			entry.addProperty("arrivalTime", wallTime + (arrival.getArrival() - coreTime));
 			entry.addProperty("departureTime", wallTime + (arrival.getDeparture() - coreTime));
@@ -303,7 +316,7 @@ final class BlueMapSnapshot {
 		private final BlueMapRoutePolicy.DisplayRoute display;
 		private final Map<String, RailSpan> spans = new LinkedHashMap<>();
 		private final Set<String> stations = new LinkedHashSet<>();
-		private final Map<Long, JsonObject> services = new LinkedHashMap<>();
+		private final Map<String, JsonObject> services = new LinkedHashMap<>();
 		private int missingLegs;
 
 		private RouteGeometry(BlueMapRoutePolicy.DisplayRoute display) {
