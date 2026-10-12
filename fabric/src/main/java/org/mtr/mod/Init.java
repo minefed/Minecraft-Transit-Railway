@@ -28,6 +28,7 @@ import org.mtr.mapping.registry.Registry;
 import org.mtr.mapping.tool.DummyClass;
 import org.mtr.mixin.PlayerTeleportationStateAccessor;
 import org.mtr.mod.config.Config;
+import org.mtr.mod.bluemap.BlueMapLiveBridge;
 import org.mtr.mod.data.ArrivalsCacheServer;
 import org.mtr.mod.data.RailActionModule;
 import org.mtr.mod.generated.lang.TranslationProvider;
@@ -79,6 +80,7 @@ public final class Init implements Utilities {
 	}
 
 	public static void init() {
+		BlueMapLiveBridge.register();
 		LOGGER.info("Starting Minecraft with arguments:\n{}", String.join("\n", ManagementFactory.getRuntimeMXBean().getInputArguments()));
 		AsciiArt.print();
 		Blocks.init();
@@ -193,6 +195,7 @@ public final class Init implements Utilities {
 			final int defaultPort = Config.getServer().getWebserverPort();
 			serverPort = defaultPort <= 0 ? -1 : findFreePort(defaultPort);
 			main = new Main(minecraftServer.getSavePath(WorldSavePath.getRootMapped()).resolve("mtr"), serverPort, Config.getServer().getUseThreadedSimulation(), Config.getServer().getUseThreadedFileLoading(), webserverSetup, WORLD_ID_LIST.toArray(new String[0]));
+			BlueMapLiveBridge.start(main, minecraftServer);
 
 			serverTick = 0;
 			lastSavedMillis = System.currentTimeMillis();
@@ -230,6 +233,7 @@ public final class Init implements Utilities {
 		});
 
 		REGISTRY.eventRegistry.registerServerStopping(minecraftServer -> {
+			BlueMapLiveBridge.stop();
 			try {
 				if (main != null) {
 					main.stop();
