@@ -225,6 +225,33 @@ test('static response from another publication is rejected even if the map gener
     assert.equal(state.chunks,undefined);
 });
 
+test('unchanged infrastructure refreshes preserve loaded meshes and markers while geometry and labels still update', async () => {
+    let now = 1000, clears = 0, legends = 0;
+    const data = {schema:1,publicationRevision:'current',timestamp:1,rails:[{points:[[0,0,0],[8,0,0]]}],routes:[{id:'r',name:'Line',paths:[[[0,0,0],[8,0,0]]]}],stations:[{id:'s',name:'Station',position:[0,0,0]}]};
+    const state = {
+        generation:1,disposed:false,staticVersion:1,publicationRevision:'current',now:()=>now,
+        json:async()=>structuredClone(data),loadedChunks:new Map(),loadedRouteChunks:new Map(),
+        removeRailChunk(){throw new Error('Unchanged meshes must not be disposed')},
+        clearStations(){clears++},updateRouteLegend(){legends++}
+    };
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    const chunks = state.chunks, routes = state.routeChunks, stations = state.stationData;
+    state.loadedChunks.set('mesh',{}); state.loadedRouteChunks.set('route-mesh',{});
+    now = 32000; data.timestamp++;
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    assert.equal(state.chunks,chunks); assert.equal(state.routeChunks,routes); assert.equal(state.stationData,stations);
+    assert.equal(state.loadedChunks.size,1); assert.equal(state.loadedRouteChunks.size,1);
+    assert.equal(clears,1); assert.equal(legends,1); assert.equal(state.lastRailsAt,now);
+    assert.equal(state.railRequestGeneration,null);
+    let disposed = 0; state.removeRailChunk=()=>disposed++;
+    now = 63000; data.timestamp++; data.stations[0].name='Renamed station';
+    data.rails[0].points[1][0]=16;
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    assert.notEqual(state.chunks,chunks); assert.equal(state.stationData[0].name,'Renamed station');
+    assert.equal(disposed,2); assert.equal(clears,2); assert.equal(legends,2);
+    assert.equal(state.lastRailsAt,now);
+});
+
 test('shared route paths have separated ribbons even when traversed in opposite directions', () => {
     const chunks = routeChunks({ routes: [
         { id: 'a', color: '#ff0000', paths: [[[0, 64, 0], [16, 64, 0]]] },

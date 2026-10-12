@@ -41,3 +41,47 @@ test('real Three r147 renderer builds dimensioned cars, sloped instances, route 
     overlay.dispose();
     assert.equal(viewer.markers.children.length,0);
 });
+
+test('live trains keep interpolating and expire on idle frames without forcing full-rate terrain renders', () => {
+    let now = 1000, redraws = 0;
+    const viewer = { markers:new THREE.Scene(), map:{data:{id:'a'}}, data:{mapState:'loaded',loadedHiresViewDistance:200},
+        controlsManager:{position:new THREE.Vector3(),distance:300},camera:new THREE.PerspectiveCamera(),
+        renderer:{domElement:{addEventListener(){},removeEventListener(){},getBoundingClientRect:()=>({width:1000,height:800})}},redraw(){redraws++} };
+    const overlay = new Overlay({mapViewer:viewer,events:new EventTarget()},THREE,{ui:false,poll:false,base:'http://localhost/',fetch:async()=>{},now:()=>now});
+    overlay.entry={};
+    const sample = (timestamp,x) => ({schema:1,timestamp,vehicles:[{id:'t',cars:[{id:'car',position:[x,0,0],yaw:0,pitch:0}]}]});
+    overlay.buffer.push(sample(1000,0),1000);
+    overlay.buffer.push(sample(1500,10),1500);
+    now=1900; overlay.render();
+    assert.equal(overlay.cars.get('t:0').position.x,5);
+    now=2150; overlay.render();
+    assert.equal(overlay.cars.get('t:0').position.x,10);
+    viewer.controlsManager.position.x=10000; now+=50; overlay.render();
+    assert.equal(overlay.cars.size,0);
+    assert.equal(redraws,0);
+    now=8000; overlay.render();
+    assert.equal(overlay.trainGroup.visible,false);
+    overlay.dispose();
+});
+
+test('distant train markers only rewrite changed labels and colors and still update positions', () => {
+    let now=1000, labelWrites=0, colorWrites=0, removals=0;
+    const viewer={markers:new THREE.Scene(),map:{data:{id:'a'}},data:{mapState:'loaded'},
+        controlsManager:{position:new THREE.Vector3(),distance:2000},camera:new THREE.PerspectiveCamera(),
+        renderer:{domElement:{addEventListener(){},removeEventListener(){},getBoundingClientRect:()=>({width:1000,height:800})}},redraw(){throw new Error('Idle train markers must not force high FPS')}};
+    const overlay=new Overlay({mapViewer:viewer,events:new EventTarget()},THREE,{ui:false,poll:false,base:'http://localhost/',fetch:async()=>{},now:()=>now});
+    overlay.entry={};
+    overlay.createTrainDot=()=>{const dot=new THREE.Group();dot.userData.button={setAttribute(){labelWrites++},style:{setProperty(){colorWrites++}}};overlay.trainGroup.add(dot);return dot};
+    overlay.disposeHtmlMarker=dot=>{dot.removeFromParent();removals++};
+    const sample=(timestamp,x,name='Line',color='#ff0000')=>({schema:1,timestamp,vehicles:[{id:'t',routeName:name,color,cars:[{id:'car',position:[x,0,0],yaw:0,pitch:0}]}]});
+    overlay.buffer.push(sample(1000,0),1000);overlay.render();
+    now+=50;overlay.render();
+    assert.equal(labelWrites,1);assert.equal(colorWrites,1);
+    overlay.buffer.push(sample(1500,10),1500);now=2150;overlay.render();
+    assert.equal(overlay.trainDots.get('t').position.x,10);
+    assert.equal(labelWrites,1);assert.equal(colorWrites,1);
+    overlay.buffer.push(sample(2000,20,'Renamed','#0000ff'),2000);now=2650;overlay.render();
+    assert.equal(labelWrites,2);assert.equal(colorWrites,2);
+    now=9000;overlay.render();assert.equal(overlay.trainDots.size,0);assert.equal(removals,1);
+    overlay.dispose();
+});

@@ -519,6 +519,7 @@
             this.publicationRevision = null;
             this.staticVersion = (this.staticVersion || 0) + 1;
             this.infrastructureReady = false;
+            this.infrastructureSignature = null;
             this.updateRouteLegend([]);
             this.group.visible = false;
             this.leave();
@@ -586,6 +587,13 @@
                 const rails = await this.json(path);
                 if (!current()) return;
                 if ((typeof rails.publicationRevision === "string" ? rails.publicationRevision : null) !== revision) return;
+                // The exporter changes its timestamp every refresh, even when the infrastructure is unchanged.
+                // Keep the existing GPU meshes and HTML markers instead of rebuilding the whole network.
+                const signature = JSON.stringify([rails.rails, rails.routes, rails.stations]);
+                if (signature === this.infrastructureSignature) {
+                    this.lastRailsAt = this.now();
+                    return;
+                }
                 const chunks = railChunks(rails);
                 this.loadedChunks.forEach(group => this.removeRailChunk(group));
                 this.loadedChunks.clear();
@@ -601,6 +609,7 @@
                 this.clearStations();
                 this.stationData = (Array.isArray(rails.stations) ? rails.stations : []).filter(station => station && typeof station.id === "string" && vector(station.position));
                 this.missingLegs = routes.reduce((sum, route) => sum + (finite(route.missingLegs) ? route.missingLegs : 0), 0);
+                this.infrastructureSignature = signature;
                 this.lastRailsAt = this.now();
                 this.lastCullAt = -Infinity;
             } catch (error) {
@@ -617,6 +626,7 @@
             this.railRequestGeneration = null;
             this.lastRailsAt = -Infinity;
             this.infrastructureReady = false;
+            this.infrastructureSignature = null;
             this.buffer.clear();
             this.arrivals = [];
             this.arrivalsTimestamp = -Infinity; this.arrivalsFreshAt = -Infinity;
@@ -694,11 +704,17 @@
                 if (dot) {
                     dot.position.fromArray(car.position);
                     dot.position.y += 3.5;
-                    dot.userData.mtrLabel = `${car.routeName ? `${car.routeName} · ` : ""}${catalogEntry(this.catalog, car).name} · ${car.vehicleId}`;
+                    const label = `${car.routeName ? `${car.routeName} · ` : ""}${catalogEntry(this.catalog, car).name} · ${car.vehicleId}`;
+                    if (dot.userData.mtrLabel !== label) {
+                        dot.userData.mtrLabel = label;
+                        dot.userData.button.title = label;
+                        dot.userData.button.setAttribute("aria-label", label);
+                    }
+                    if (dot.userData.color !== car.color) {
+                        dot.userData.color = car.color;
+                        dot.userData.button.style.setProperty("--mtr-route", car.color);
+                    }
                     dot.userData.car = car;
-                    dot.userData.button.title = dot.userData.mtrLabel;
-                    dot.userData.button.setAttribute("aria-label", dot.userData.mtrLabel);
-                    dot.userData.button.style.setProperty("--mtr-route", car.color);
                 }
             }
             for (const [id, dot] of this.trainDots) if (!dotIds.has(id)) {
@@ -758,7 +774,8 @@
                 }
                 this.updateArrivals();
             }
-            if (!stale && poses.size && this.showTrains) this.viewer.redraw();
+            // BlueMap already renders idle frames at 20 FPS. Calling redraw here on every live sample
+            // keeps its full terrain render at the monitor refresh rate, even for distant or stopped trains.
             if (stale) this.leave();
         }
 
