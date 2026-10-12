@@ -242,8 +242,18 @@ tasks.register("verifyLightTypeCompatibility", Test) {
 	systemProperty "mtr.test.modJar", distributionJar.get().asFile.absolutePath
 }
 
+tasks.register("verifyBlueMapLiveWeb", Exec) {
+	group = "verification"
+	description = "Checks live map snapshots, interpolation, and route/station geometry."
+	workingDir rootProject.projectDir
+	commandLine "node", "--test", "tools/bluemap/mtr-live.test.cjs"
+	inputs.file(rootProject.file("tools/bluemap/mtr-live.test.cjs"))
+	inputs.file("src/main/resources/assets/mtr/bluemap/mtr-live.js")
+}
+
 tasks.named("check") {
 	dependsOn tasks.named("verifyMixinCompatibility")
 	dependsOn tasks.named("verifyRailRendering")
 	dependsOn tasks.named("verifyLightTypeCompatibility")
+	dependsOn tasks.named("verifyBlueMapLiveWeb")
 }

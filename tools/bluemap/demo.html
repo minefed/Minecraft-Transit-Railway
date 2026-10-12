@@ -1,0 +1,64 @@
+<!doctype html>
+<html lang="ko"><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>MTR · BlueMap synthetic visual QA</title>
+<style>
+html,body,#map { margin:0;width:100%;height:100%;overflow:hidden;font-family:system-ui,sans-serif;background:#d8e0dd }
+.qa {position:fixed;left:18px;top:18px;z-index:30;padding:12px 16px;background:#fffffff0;border:1px solid #adb9c2;border-radius:10px;color:#233346;max-width:430px;box-shadow:0 3px 14px #0002}
+.qa strong {display:block;margin-bottom:5px}.qa p {margin:6px 0;font-size:13px}.qa button {padding:6px 9px;margin:3px;border:1px solid #a0acb8;border-radius:5px;background:white;cursor:pointer}
+.qa .note {font-size:11px;color:#536879}.bm-marker-html {position:relative}.bm-marker-html button:focus-visible {outline:3px solid #ffb400;outline-offset:2px}
+</style>
+<div id="map"></div>
+<div class="qa"><strong>MTR × BlueMap · 합성 데이터 검증</strong><p>마우스로 회전·확대합니다. 실제 서버 데이터가 아닙니다.</p>
+<button id="close">근거리 3D</button><button id="city">도시 전체</button><button id="pause">서버 응답 중단</button><button id="switch">지도 전환</button>
+<p class="note">실제 BlueMap HtmlMarker/CSS2DRenderer와 로컬 Three.js 사용 · 외부 네트워크 없음</p></div>
+<script type="module">
+import * as THREE from '/vendor/three.js';
+import { OrbitControls } from '/vendor/OrbitControls.js';
+import { HtmlMarker } from '/bluemap/markers/HtmlMarker.js';
+import { CSS2DRenderer } from '/bluemap/util/CSS2DRenderer.js';
+window.BlueMap = { Three: THREE, HtmlMarker };
+const root = document.getElementById('map'), events = root;
+const renderer = new THREE.WebGLRenderer({antialias:true,logarithmicDepthBuffer:true});
+renderer.setPixelRatio(devicePixelRatio); renderer.setSize(innerWidth,innerHeight); renderer.autoClear=false; root.append(renderer.domElement);
+const css = new CSS2DRenderer(events); css.setSize(innerWidth,innerHeight); root.append(css.domElement);
+Object.assign(css.domElement.style,{position:'absolute',top:'0',left:'0',pointerEvents:'none'});
+const camera = new THREE.PerspectiveCamera(45,innerWidth/innerHeight,0.1,100000);
+const scene = new THREE.Scene(); scene.background = new THREE.Color('#d8e0dd');
+const markers = new THREE.Scene();
+const controls = new OrbitControls(camera,renderer.domElement); controls.target.set(25,0,5); camera.position.set(210,170,240); controls.update();
+const ground = new THREE.Mesh(new THREE.PlaneGeometry(1800,1800),new THREE.MeshBasicMaterial({color:'#b7c5ad'}));ground.rotation.x=-Math.PI/2;ground.position.y=-0.3;scene.add(ground);
+const grid = new THREE.GridHelper(1800,90,0x87988b,0x9faf9c);scene.add(grid);
+for(let i=0;i<55;i++){ const mesh=new THREE.Mesh(new THREE.BoxGeometry(12+(i%4)*3,7+(i%5)*4,11),new THREE.MeshBasicMaterial({color:i%2?'#d9d5c8':'#c3cacb'}));mesh.position.set((i%11)*38-190,mesh.geometry.parameters.height/2,Math.floor(i/11)*44-95);scene.add(mesh); }
+const viewer = {rootElement:root,renderer,camera,markers,map:{data:{id:'demo'}},data:{mapState:'loaded',loadedHiresViewDistance:500},controlsManager:{position:controls.target,distance:350},redraw(){}};
+window.bluemap = {mapViewer:viewer,events};
+const ellipse = (t, offset=0)=>[Math.cos(t)*230,2+Math.sin(t*2)*3,Math.sin(t)*145+offset];
+const points = Array.from({length:161},(_,i)=>ellipse(i/160*Math.PI*2));
+const branch = Array.from({length:101},(_,i)=>[-600+i*12,-12+Math.sin(i/100*Math.PI)*20,-180+i*3.6]);
+const rails={schema:1,rails:[{id:'loop',points},{id:'branch',points:branch}],routes:[
+{id:'blue',name:'1호선',color:'#317fce',paths:[points],stations:['a','b','c','d']},
+{id:'orange',name:'2호선',color:'#f18c35',paths:[points.slice(0,50)],stations:['a','b']},
+{id:'green',name:'3호선',color:'#3ba879',paths:[branch],stations:['e','f','g']}],stations:[
+{id:'a',name:'중앙역',position:ellipse(0),routes:['blue','orange']},{id:'b',name:'시청역',position:ellipse(Math.PI/2),routes:['blue','orange']},
+{id:'c',name:'강변역',position:ellipse(Math.PI),routes:['blue']},{id:'d',name:'공원역',position:ellipse(Math.PI*1.5),routes:['blue']},
+{id:'e',name:'서부역',position:branch[0],routes:['green']},{id:'f',name:'환승 <역>',position:branch[50],routes:['green']},{id:'g',name:'동부역',position:branch[100],routes:['green']}]};
+let paused=false, frozen=null;
+const start=Date.now();
+function vehicles(){const time=(Date.now()-start)/1000;return {schema:1,timestamp:Date.now(),vehicles:[0,1,2,3].map((n)=>({id:`train-${n}`,routeId:n%2?'orange':'blue',routeName:n%2?'2호선':'1호선',color:n%2?'#f18c35':'#317fce',cars:Array.from({length:4},(_,i)=>{const t=time*0.026+n*Math.PI/2-i*0.092;const p=ellipse(t),next=ellipse(t+0.001);const dx=next[0]-p[0],dy=next[1]-p[1],dz=next[2]-p[2];return{id:n===3?'custom-unknown':'demo-model',position:p,yaw:Math.atan2(dx,dz),pitch:-Math.atan2(dy,Math.hypot(dx,dz)),length:18,width:3.1}})}))};}
+const nativeFetch=window.fetch.bind(window);
+window.fetch=async(url,options)=>{if(!String(url).includes('/mtr-live/'))return nativeFetch(url,options);let data;
+if(String(url).endsWith('index.json'))data={schema:1,maps:{demo:{worldId:'synthetic',vehicles:'mtr-live/demo-vehicles.json',rails:'mtr-live/demo-rails.json'},other:{worldId:'empty',vehicles:'mtr-live/other-vehicles.json',rails:'mtr-live/other-rails.json'}},catalog:'mtr-live/catalog.json'};
+else if(String(url).endsWith('catalog.json'))data={schema:1,vehicles:{'demo-model':{name:'통근형 전동차',length:18,width:3.1}}};
+else if(String(url).includes('other-rails'))data={schema:1,rails:[],routes:[],stations:[]};
+else if(String(url).includes('other-vehicles'))data={schema:1,timestamp:Date.now(),vehicles:[]};
+else if(String(url).endsWith('rails.json'))data=rails;
+else data=paused?frozen:vehicles();
+return {ok:true,json:async()=>data};};
+const script=document.createElement('script');script.src='/mtr-live.js';document.body.append(script);
+function draw(){requestAnimationFrame(draw);controls.update();viewer.controlsManager.distance=camera.position.distanceTo(controls.target);events.dispatchEvent(new CustomEvent('bluemapRenderFrame',{detail:{delta:16}}));renderer.clear();renderer.render(scene,camera);renderer.render(markers,camera);css.render(markers,camera);}
+draw();
+window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);css.setSize(innerWidth,innerHeight)});
+document.getElementById('close').onclick=()=>{controls.target.set(100,0,75);camera.position.set(250,130,240);controls.update()};
+document.getElementById('city').onclick=()=>{controls.target.set(0,0,0);camera.position.set(550,1400,1300);controls.update()};
+document.getElementById('pause').onclick=event=>{paused=!paused;frozen=vehicles();event.target.textContent=paused?'서버 응답 재개':'서버 응답 중단'};
+document.getElementById('switch').onclick=()=>{viewer.map={data:{id:viewer.map.data.id==='demo'?'other':'demo'}};events.dispatchEvent(new CustomEvent('bluemapMapChanged',{detail:{map:viewer.map}}))};
+</script></html>
