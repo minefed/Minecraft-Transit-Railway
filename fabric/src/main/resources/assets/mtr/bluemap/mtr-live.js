@@ -33,6 +33,8 @@
                     serviceId: typeof vehicle.serviceId === "string" ? vehicle.serviceId : "",
                     serviceName: typeof vehicle.serviceName === "string" ? vehicle.serviceName : "",
                     showServiceName: vehicle.showServiceName !== false,
+                    operatorId: typeof vehicle.operatorId === "string" ? vehicle.operatorId : "",
+                    operatorName: typeof vehicle.operatorName === "string" ? vehicle.operatorName : "",
                     sourceRouteId: typeof vehicle.sourceRouteId === "string" ? vehicle.sourceRouteId : "",
                     carCount: vehicle.cars.length,
                     color: color(vehicle.color),
@@ -109,20 +111,55 @@
         const result = new Map();
         for (const route of Array.isArray(routes) ? routes : []) {
             if (!route || typeof route.id !== "string" || result.has(route.id)) continue;
-            result.set(route.id, { id: route.id, name: typeof route.name === "string" && route.name ? route.name : "철도 노선", color: color(route.color), stations: [...new Set(Array.isArray(route.stations) ? route.stations : [])], services: uniqueServices(route.services) });
+            result.set(route.id, { id: route.id, name: typeof route.name === "string" && route.name ? route.name : "철도 노선", color: color(route.color), stations: [...new Set(Array.isArray(route.stations) ? route.stations : [])], services: uniqueServices(route.services), operators: uniqueOperators(route.operators) });
         }
         return result;
     }
 
     function stationRoutes(station, routes) {
-        return [...new Set(Array.isArray(station.routes) ? station.routes : [])].map(id => routes.get(id)).filter(Boolean);
+        const services = uniqueServices(station.services);
+        return [...new Set(Array.isArray(station.routes) ? station.routes : [])].map(id => routes.get(id)).filter(Boolean)
+            .map(route => ({ ...route, operators: uniqueOperators(services.filter(service => service.routeId === route.id).flatMap(service => service.operators)) }));
+    }
+
+    function transferStations(station, stations, routes) {
+        if (typeof station.interchangeId !== "string" || !station.interchangeId || !(stations instanceof Map)) return [];
+        return [...new Set(Array.isArray(station.transferStationIds) ? station.transferStationIds : [])]
+            .filter(id => typeof id === "string" && id !== station.id)
+            .map(id => stations.get(id))
+            .filter(peer => peer && peer.interchangeId === station.interchangeId && stationRoutes(peer, routes).length);
+    }
+
+    function stationConnections(station, stations, routes) {
+        const direct = stationRoutes(station, routes), peers = transferStations(station, stations, routes);
+        const connected = new Map(direct.map(route => [route.id, route]));
+        peers.forEach(peer => stationRoutes(peer, routes).forEach(route => {
+            const existing = connected.get(route.id);
+            connected.set(route.id, { ...route, operators: uniqueOperators([...(existing ? existing.operators : []), ...route.operators]) });
+        }));
+        return { direct, peers, routes: [...connected.values()], interchange: peers.length > 0 || direct.length > 1 };
+    }
+
+    function uniqueOperators(operators) {
+        const result = new Map();
+        for (const operator of Array.isArray(operators) ? operators : []) {
+            if (!operator || typeof operator.id !== "string" || !operator.id || typeof operator.name !== "string" || !operator.name.trim() || result.has(operator.id)) continue;
+            result.set(operator.id, { id: operator.id, name: operator.name });
+        }
+        return [...result.values()];
+    }
+
+    function operatorNames(operators) {
+        return uniqueOperators(operators).map(operator => operator.name).join(" / ");
     }
 
     function uniqueServices(services) {
         const result = new Map();
         for (const service of Array.isArray(services) ? services : []) {
-            if (!service || typeof service.id !== "string" || result.has(service.id)) continue;
-            result.set(service.id, { id: service.id, name: typeof service.name === "string" ? service.name : "", showName: service.showName !== false, routeId: typeof service.routeId === "string" ? service.routeId : "", color: color(service.color) });
+            if (!service || typeof service.id !== "string") continue;
+            const existing = result.get(service.id);
+            if (existing) { existing.operators = uniqueOperators([...existing.operators, ...uniqueOperators(service.operators)]); continue; }
+            result.set(service.id, { id: service.id, name: typeof service.name === "string" ? service.name : "", showName: service.showName !== false, routeId: typeof service.routeId === "string" ? service.routeId : "", color: color(service.color), operators: uniqueOperators(service.operators) });
         }
         return [...result.values()];
     }
@@ -139,6 +176,8 @@
                 serviceId: typeof arrival.serviceId === "string" ? arrival.serviceId : "",
                 serviceName: typeof arrival.serviceName === "string" ? arrival.serviceName : "",
                 showServiceName: arrival.showServiceName !== false,
+                operatorId: typeof arrival.operatorId === "string" ? arrival.operatorId : "",
+                operatorName: typeof arrival.operatorName === "string" ? arrival.operatorName : "",
                 destination: typeof arrival.destination === "string" ? arrival.destination : "",
                 minutes: Math.max(0, Math.ceil((arrival.arrivalTime - now) / 60000)), soon: arrival.arrivalTime - now < 30000,
                 atStation: arrival.arrivalTime <= now, terminating: arrival.terminating === true, realtime: arrival.realtime !== false
@@ -176,6 +215,7 @@
 .mtr-panel-content{padding:0 16px 13px;max-height:calc(100dvh - 176px);overflow:auto}.mtr-panel-content[hidden]{display:none}.mtr-section-title{display:flex;justify-content:space-between;align-items:center;margin:0 0 8px;font-size:11px;font-weight:600;letter-spacing:.3px;color:#7b8795}.mtr-route-count{font-weight:500;font-variant-numeric:tabular-nums}
 .mtr-route-list{margin:0 -3px 15px;padding:0;max-height:224px;overflow:auto;list-style:none}.mtr-route-row{display:flex;align-items:center;gap:10px;padding:7px 3px}.mtr-route-symbol{width:26px;height:26px;display:grid;place-items:center;color:var(--mtr-route);background:white;border:2px solid var(--mtr-route);border-radius:9px;flex-shrink:0}.mtr-route-symbol svg{width:15px;height:15px}.mtr-route-name{font-size:13px;font-weight:600;flex:1;overflow-wrap:anywhere}.mtr-route-meta{font-size:10px;color:#8a95a2;white-space:nowrap}
 .mtr-route-label{flex:1;min-width:0}.mtr-services{display:flex;flex-wrap:wrap;gap:4px;margin-top:4px}.mtr-service{display:inline-block;padding:1px 5px;color:#728091;background:#f1f4f7;border-radius:4px;font-size:9px;font-weight:500}.mtr-info .mtr-services{margin:12px 0 0}.mtr-info .mtr-service{font-size:10px;padding:3px 7px}
+.mtr-operators{display:block;margin-top:3px;font-size:10px;font-weight:400;color:#788594;overflow-wrap:anywhere}.mtr-chip-copy{min-width:0;overflow-wrap:anywhere}.mtr-chip .mtr-operators{font-size:9px;margin-top:1px}.mtr-interchanges{border-top:1px solid #eef1f4;margin-top:15px;padding-top:12px}.mtr-interchanges h3{font-size:12px;margin:0 0 5px;color:#465b70}.mtr-interchanges p{font-size:11px;color:#8190a0;margin:0 0 9px;overflow-wrap:anywhere}.mtr-interchange-station{display:block;width:100%;padding:10px;margin-top:6px;border:1px solid #e3e9ef;border-radius:10px;background:#fafcfe;color:#344354;text-align:left}.mtr-interchange-station:hover{background:#eef5ff}.mtr-interchange-name{display:block;margin-bottom:6px;font-weight:600;font-size:12px}.mtr-interchange-station .mtr-chips{gap:4px}.mtr-interchange-station .mtr-chip{padding:3px 6px;font-size:10px}.mtr-info{max-height:calc(100dvh - 120px);overflow:auto}
 .mtr-empty{padding:18px 8px 22px;text-align:center;color:#8995a4}.mtr-empty svg{display:block;width:30px;height:30px;margin:0 auto 9px;color:#acb8c5}.mtr-empty p{margin:0;font-size:12px;color:#697889}
 .mtr-layer-grid{display:grid;grid-template-columns:1fr 1fr;gap:7px;padding-bottom:12px}.mtr-layer{display:flex;align-items:center;gap:7px;min-height:39px;padding:8px 9px;border:1px solid #e5e9ee;border-radius:10px;background:#fafbfc;color:#7b8795;text-align:left}.mtr-layer svg{width:17px;height:17px}.mtr-layer[aria-pressed="true"]{color:#266bc0;background:#eef5ff;border-color:#caddf7}.mtr-layer:hover{filter:brightness(.98)}.mtr-layer span{font-size:11px;font-weight:600;flex:1}.mtr-layer .mtr-check{width:13px;height:13px;opacity:0}.mtr-layer[aria-pressed="true"] .mtr-check{opacity:1}
 .mtr-status{display:flex;align-items:center;gap:6px;border-top:1px solid #eef0f3;padding-top:11px;color:#83909e;font-size:10px;min-height:27px}.mtr-status:before{content:"";width:5px;height:5px;background:#95a2b1;border-radius:50%;flex-shrink:0}.mtr-status[data-state="live"]:before{background:#3baf7b}.mtr-status[data-state="offline"]:before{background:#d4a156}
@@ -286,6 +326,7 @@
             this.routeChunks = new Map();
             this.loadedRouteChunks = new Map();
             this.stationData = [];
+            this.stationCatalog = new Map();
             this.stations = new Map();
             this.cars = new Map();
             this.trainDots = new Map();
@@ -425,19 +466,19 @@
             marker.renderOrder = 11;
             marker.position.y = 1.2;
             group.add(marker);
-            const routes = stationRoutes(station, this.routeCatalog), names = routes.map(route => route.name);
+            const connections = stationConnections(station, this.stationCatalog, this.routeCatalog), routes = connections.routes, names = routes.map(route => [route.name, operatorNames(route.operators)].filter(Boolean).join(" · "));
             group.userData.mtrLabel = `${station.name || "철도역"}${names.length ? ` · ${names.join(" / ")}` : ""}`;
             const HtmlMarker = scope.BlueMap && scope.BlueMap.HtmlMarker;
             if (HtmlMarker && typeof document !== "undefined") {
                 const label = document.createElement("button");
                 label.type = "button";
-                label.className = `mtr-station${routes.length > 1 ? " mtr-station--transfer" : ""}`;
+                label.className = `mtr-station${connections.interchange ? " mtr-station--transfer" : ""}`;
                 label.style.setProperty("--mtr-route", routes[0] ? routes[0].color : NEUTRAL_COLOR);
                 label.title = group.userData.mtrLabel;
                 label.setAttribute("aria-label", group.userData.mtrLabel);
                 const symbol = document.createElement("span"), name = document.createElement("span");
                 symbol.className = "mtr-station-icon";
-                if (routes.length > 1) symbol.appendChild(icon("transfer"));
+                if (connections.interchange) symbol.appendChild(icon("transfer"));
                 name.className = "mtr-station-name"; name.textContent = station.name || "철도역";
                 label.append(symbol, name);
                 label.addEventListener("click", event => { event.stopPropagation(); this.showStationDetail(station); });
@@ -514,6 +555,7 @@
             this.routeChunks.clear();
             this.clearStations();
             this.stationData = [];
+            this.stationCatalog = new Map();
             this.routeNames = new Map();
             this.routeCatalog = new Map();
             this.publicationRevision = null;
@@ -608,6 +650,11 @@
                 this.updateRouteLegend(routes);
                 this.clearStations();
                 this.stationData = (Array.isArray(rails.stations) ? rails.stations : []).filter(station => station && typeof station.id === "string" && vector(station.position));
+                this.stationCatalog = new Map(this.stationData.map(station => [station.id, station]));
+                if (this.selectedStation) {
+                    const selected = this.stationCatalog.get(this.selectedStation.id);
+                    if (selected) this.showStationDetail(selected); else this.clearDetail();
+                }
                 this.missingLegs = routes.reduce((sum, route) => sum + (finite(route.missingLegs) ? route.missingLegs : 0), 0);
                 this.infrastructureSignature = signature;
                 this.lastRailsAt = this.now();
@@ -638,6 +685,7 @@
             this.loadedRouteChunks.forEach(group => this.removeRailChunk(group));
             this.loadedRouteChunks.clear(); this.routeChunks.clear();
             this.clearStations(); this.stationData = [];
+            this.stationCatalog = new Map();
             this.routeCatalog = new Map(); this.routeNames = new Map();
             this.updateRouteLegend([]); this.clearDetail(); this.leave();
             this.lastCullAt = -Infinity;
@@ -860,24 +908,47 @@
             category.append(icon(symbol), document.createTextNode(kind));
             close.type = "button"; close.className = "mtr-info-close"; close.setAttribute("aria-label", "철도 정보 닫기"); close.appendChild(icon("close"));
             close.addEventListener("click", () => this.clearDetail()); top.append(category, close);
-            const heading = document.createElement("h2"), subtitle = document.createElement("p"), chips = document.createElement("div");
+            const heading = document.createElement("h2"), subtitle = document.createElement("p");
             heading.className = "mtr-info-title"; heading.textContent = title;
             subtitle.className = "mtr-info-description"; subtitle.textContent = description;
+            this.detail.append(top, heading, subtitle, this.routeChips(routes)); this.detail.hidden = false;
+        }
+
+        routeChips(routes) {
+            const chips = document.createElement("div");
             chips.className = "mtr-chips";
             for (const route of routes) {
-                const chip = document.createElement("span"), dot = document.createElement("span");
+                const chip = document.createElement("span"), dot = document.createElement("span"), copy = document.createElement("span");
                 chip.className = "mtr-chip"; dot.className = "mtr-chip-dot"; dot.style.setProperty("--mtr-route", color(route.color));
-                dot.setAttribute("aria-hidden", "true"); chip.append(dot, document.createTextNode(route.name)); chips.appendChild(chip);
+                copy.className = "mtr-chip-copy"; copy.textContent = route.name;
+                const operators = operatorNames(route.operators);
+                if (operators) { const label = document.createElement("span"); label.className = "mtr-operators"; label.textContent = operators; copy.appendChild(label); }
+                dot.setAttribute("aria-hidden", "true"); chip.append(dot, copy); chips.appendChild(chip);
             }
-            this.detail.append(top, heading, subtitle, chips); this.detail.hidden = false;
+            return chips;
         }
 
         showStationDetail(station) {
-            const routes = stationRoutes(station, this.routeCatalog);
-            this.showDetail({ title: station.name || "철도역", kind: routes.length > 1 ? "환승역" : "철도역", description: routes.length > 1 ? `${routes.length}개 노선에서 이용할 수 있습니다` : "운행 노선", routes, symbol: routes.length > 1 ? "transfer" : "station" });
+            const connections = stationConnections(station, this.stationCatalog, this.routeCatalog), routes = connections.direct;
+            this.showDetail({ title: station.name || "철도역", kind: connections.interchange ? "환승역" : "철도역", description: routes.length > 1 ? `${routes.length}개 노선에서 이용할 수 있습니다` : "운행 노선", routes, symbol: connections.interchange ? "transfer" : "station" });
             if (!this.detail) return;
             const services = uniqueServices(station.services).filter(service => service.showName && (!service.routeId || this.routeCatalog.has(service.routeId)));
             if (services.length) this.detail.appendChild(this.serviceBadges(services));
+            if (connections.peers.length) {
+                const section = document.createElement("div"), heading = document.createElement("h3"), description = document.createElement("p");
+                section.className = "mtr-interchanges"; heading.textContent = "간접환승";
+                description.textContent = [typeof station.interchangeName === "string" ? station.interchangeName : "", "연결된 역을 선택하면 해당 역의 도착 정보를 볼 수 있습니다."].filter(Boolean).join(" · ");
+                section.append(heading, description);
+                for (const peer of connections.peers) {
+                    const button = document.createElement("button"), name = document.createElement("span"), peerRoutes = stationRoutes(peer, this.routeCatalog);
+                    button.type = "button"; button.className = "mtr-interchange-station";
+                    name.className = "mtr-interchange-name"; name.textContent = peer.name || "철도역";
+                    button.setAttribute("aria-label", `${peer.name || "철도역"} · ${peerRoutes.map(route => [route.name, operatorNames(route.operators)].filter(Boolean).join(" · ")).join(" / ")} 도착 정보 보기`);
+                    button.append(name, this.routeChips(peerRoutes));
+                    button.addEventListener("click", () => this.showStationDetail(peer)); section.appendChild(button);
+                }
+                this.detail.appendChild(section);
+            }
             this.selectedStation = station;
             this.arrivalsElement = document.createElement("div"); this.arrivalsElement.className = "mtr-arrivals";
             this.arrivalsElement.setAttribute("aria-live", "polite");
@@ -887,7 +958,8 @@
         showTrainDetail(car) {
             const route = this.routeCatalog.get(car.routeId);
             const model = catalogEntry(this.catalog, car).name;
-            this.showDetail({ title: car.routeName || "운행 열차", kind: "실시간 열차", description: [car.showServiceName === false ? "" : car.serviceName, model, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · "), routes: route ? [route] : [], symbol: "train" });
+            const operators = uniqueOperators([{ id: car.operatorId, name: car.operatorName }]);
+            this.showDetail({ title: car.routeName || "운행 열차", kind: "실시간 열차", description: [car.showServiceName === false ? "" : car.serviceName, model, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · "), routes: route ? [{ ...route, operators }] : [], symbol: "train" });
         }
 
         serviceBadges(services) {
@@ -904,7 +976,7 @@
             const now = this.now(), stale = this.buffer.isStale(now) || now - this.arrivalsFreshAt > STALE_MS;
             const serverNow = this.buffer.offset === null ? Date.now() : now - this.buffer.offset;
             const arrivals = upcomingArrivals(this.arrivals, this.selectedStation.id, serverNow, stale).filter(arrival => this.routeCatalog.has(arrival.routeId));
-            const signature = JSON.stringify([stale, arrivals.map(arrival => [arrival.vehicleId, arrival.arrivalTime, arrival.minutes, arrival.soon, arrival.atStation, arrival.terminating, arrival.realtime, arrival.destination, arrival.serviceName, arrival.showServiceName, arrival.routeId])]);
+            const signature = JSON.stringify([stale, arrivals.map(arrival => [arrival.vehicleId, arrival.arrivalTime, arrival.minutes, arrival.soon, arrival.atStation, arrival.terminating, arrival.realtime, arrival.destination, arrival.serviceName, arrival.showServiceName, arrival.routeId, arrival.operatorId, arrival.operatorName])]);
             if (signature === this.arrivalsSignature) return;
             this.arrivalsSignature = signature; this.arrivalsElement.replaceChildren();
             const title = document.createElement("h3"); title.textContent = "곧 도착하는 열차"; this.arrivalsElement.appendChild(title);
@@ -917,7 +989,7 @@
                 const route = this.routeCatalog.get(arrival.routeId), row = document.createElement("div"), line = document.createElement("span"), copy = document.createElement("div"), heading = document.createElement("div"), meta = document.createElement("div"), time = document.createElement("div"), minutes = document.createElement("div"), clock = document.createElement("div");
                 row.className = "mtr-arrival-row"; line.className = "mtr-arrival-line"; line.style.setProperty("--mtr-route", route.color);
                 copy.className = "mtr-arrival-copy"; heading.className = "mtr-arrival-heading"; heading.textContent = arrival.destination ? `${arrival.destination} 방면` : route.name;
-                meta.className = "mtr-arrival-meta"; meta.textContent = [route.name, arrival.showServiceName ? arrival.serviceName : "", arrival.realtime ? "" : "시간표 예정"].filter(Boolean).join(" · ");
+                meta.className = "mtr-arrival-meta"; meta.textContent = [route.name, arrival.showServiceName ? arrival.serviceName : "", arrival.operatorName, arrival.realtime ? "" : "시간표 예정"].filter(Boolean).join(" · ");
                 time.className = "mtr-arrival-time"; minutes.className = "mtr-arrival-minutes";
                 minutes.textContent = arrival.atStation ? (arrival.realtime ? arrival.terminating ? "종착" : "정차 중" : "출발 예정") : arrival.soon ? "곧 도착" : `${arrival.minutes}분`;
                 clock.className = "mtr-arrival-clock"; clock.textContent = new Date(arrival.arrivalTime).toLocaleTimeString("ko-KR", { hour: "2-digit", minute: "2-digit", hour12: false });
@@ -939,7 +1011,10 @@
                 row.className = "mtr-route-row"; swatch.className = "mtr-route-symbol"; swatch.style.setProperty("--mtr-route", route.color);
                 swatch.appendChild(icon("train")); name.className = "mtr-route-name"; name.textContent = route.name;
                 meta.className = "mtr-route-meta"; meta.textContent = `${route.stations.length}개 역`;
-                label.className = "mtr-route-label"; label.appendChild(name); if (route.services.some(service => service.showName)) label.appendChild(this.serviceBadges(route.services));
+                label.className = "mtr-route-label"; label.appendChild(name);
+                const operators = operatorNames(route.operators);
+                if (operators) { const names = document.createElement("span"); names.className = "mtr-operators"; names.textContent = operators; label.appendChild(names); }
+                if (route.services.some(service => service.showName)) label.appendChild(this.serviceBadges(route.services));
                 row.append(swatch, label, meta);
                 this.routeLegend.appendChild(row);
             }
@@ -997,7 +1072,7 @@
         }
     }
 
-    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, STALE_MS, BUFFER_MS };
+    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, transferStations, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, STALE_MS, BUFFER_MS };
     if (typeof module !== "undefined" && module.exports) module.exports = api;
     else {
         scope.MinefedMtrBlueMap = api;

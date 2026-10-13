@@ -75,6 +75,7 @@ final class BlueMapSnapshot {
 					entry.addProperty("routeId", display.id);
 					entry.addProperty("routeName", display.name);
 					entry.addProperty("color", display.color);
+					addOperator(entry, display.operator(sourceId));
 					entry.add("cars", cars);
 					result.add(entry);
 				}
@@ -101,6 +102,7 @@ final class BlueMapSnapshot {
 		final JsonObject result = new JsonObject();
 		result.addProperty("worldId", worldId);
 		final JsonArray routes = new JsonArray();
+		final Map<Long, Set<String>> stationRoutes = new LinkedHashMap<>();
 		for (Route route : simulator.routes) {
 			final JsonObject entry = new JsonObject();
 			entry.addProperty("id", Long.toUnsignedString(route.getId()));
@@ -110,8 +112,25 @@ final class BlueMapSnapshot {
 			entry.addProperty("number", route.getRouteNumber());
 			entry.addProperty("transportMode", route.getTransportMode().name());
 			routes.add(entry);
+			for (RoutePlatformData stop : route.getRoutePlatforms()) {
+				final Platform platform = stop.getPlatform();
+				if (platform != null && platform.area != null) {
+					stationRoutes.computeIfAbsent(platform.area.getId(), ignored -> new LinkedHashSet<>()).add(Long.toUnsignedString(route.getId()));
+				}
+			}
 		}
 		result.add("routes", routes);
+		final JsonArray stations = new JsonArray();
+		for (Station station : simulator.stations) {
+			final JsonObject entry = new JsonObject();
+			entry.addProperty("id", Long.toUnsignedString(station.getId()));
+			entry.addProperty("name", station.getName());
+			final JsonArray routeIds = new JsonArray();
+			stationRoutes.getOrDefault(station.getId(), java.util.Collections.emptySet()).forEach(routeIds::add);
+			entry.add("routeIds", routeIds);
+			stations.add(entry);
+		}
+		result.add("stations", stations);
 		return result;
 	}
 
@@ -129,7 +148,8 @@ final class BlueMapSnapshot {
 			final RouteGeometry geometry = displayedRoutes.computeIfAbsent(display.id, ignored -> new RouteGeometry(display));
 			final JsonObject service = service(route, display);
 			final String serviceId = service.get("id").getAsString();
-			geometry.services.putIfAbsent(serviceId, service);
+			mergeService(geometry.services, serviceId, service);
+			addOperators(geometry.operators, display.operator(route.getId()));
 			final List<Platform> platforms = new ArrayList<>();
 			for (RoutePlatformData platformData : route.getRoutePlatforms()) {
 				final Platform platform = platformData.getPlatform();
@@ -138,7 +158,7 @@ final class BlueMapSnapshot {
 					final long stationId = platform.area.getId();
 					stationRoutes.computeIfAbsent(stationId, ignored -> new LinkedHashSet<>()).add(display.id);
 					stationPlatforms.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()).put(platform.getId(), platform);
-					stationServices.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()).putIfAbsent(serviceId, service);
+					mergeService(stationServices.computeIfAbsent(stationId, ignored -> new LinkedHashMap<>()), serviceId, service);
 					geometry.stations.add(Long.toUnsignedString(stationId));
 				}
 			}
@@ -176,6 +196,7 @@ final class BlueMapSnapshot {
 		final JsonArray routes = new JsonArray();
 		displayedRoutes.values().forEach(geometry -> routes.add(geometry.json()));
 		final JsonArray stations = new JsonArray();
+		final Map<String, JsonObject> publicStations = new LinkedHashMap<>();
 		for (Station station : simulator.stations) {
 			final Map<Long, Platform> servedPlatforms = stationPlatforms.get(station.getId());
 			if (servedPlatforms == null || servedPlatforms.isEmpty()) {
@@ -199,6 +220,25 @@ final class BlueMapSnapshot {
 			stationServices.get(station.getId()).values().forEach(services::add);
 			entry.add("services", services);
 			stations.add(entry);
+			publicStations.put(Long.toUnsignedString(station.getId()), entry);
+		}
+		// Links only decorate already-published stations; never publish a private member or merge platforms.
+		for (BlueMapRoutePolicy.Interchange interchange : selection.interchanges()) {
+			final List<String> members = new ArrayList<>();
+			for (String stationId : interchange.stationIds) {
+				if (publicStations.containsKey(stationId)) members.add(stationId);
+			}
+			if (members.size() < 2) continue;
+			for (String stationId : members) {
+				final JsonObject station = publicStations.get(stationId);
+				station.addProperty("interchangeId", "interchange:" + interchange.id);
+				station.addProperty("interchangeName", interchange.name);
+				final JsonArray peers = new JsonArray();
+				for (String peer : members) {
+					if (!peer.equals(stationId)) peers.add(peer);
+				}
+				station.add("transferStationIds", peers);
+			}
 		}
 		result.add("routes", routes);
 		result.add("stations", stations);
@@ -213,7 +253,45 @@ final class BlueMapSnapshot {
 		service.addProperty("showName", label.showName);
 		service.addProperty("color", color(route.getColor()));
 		service.addProperty("routeId", display.id);
+		final JsonArray operators = new JsonArray();
+		addOperators(operators, display.operator(route.getId()));
+		service.add("operators", operators);
 		return service;
+	}
+
+	private static void addOperator(JsonObject entry, BlueMapRoutePolicy.Operator operator) {
+		if (operator != null) {
+			entry.addProperty("operatorId", operator.id);
+			entry.addProperty("operatorName", operator.name);
+		}
+	}
+
+	private static void addOperators(JsonArray operators, BlueMapRoutePolicy.Operator operator) {
+		if (operator == null) return;
+		for (var existing : operators) {
+			if (existing.getAsJsonObject().get("id").getAsString().equals(operator.id)) return;
+		}
+		final JsonObject entry = new JsonObject();
+		entry.addProperty("id", operator.id);
+		entry.addProperty("name", operator.name);
+		operators.add(entry);
+	}
+
+	private static void mergeService(Map<String, JsonObject> services, String id, JsonObject service) {
+		// Each station owns its operator union: a route serving another station must not contaminate it.
+		final JsonObject existing = services.get(id);
+		if (existing == null) {
+			services.put(id, service.deepCopy());
+			return;
+		}
+		final JsonArray operators = existing.getAsJsonArray("operators");
+		for (var candidate : service.getAsJsonArray("operators")) {
+			boolean present = false;
+			for (var operator : operators) {
+				if (operator.getAsJsonObject().get("id").equals(candidate.getAsJsonObject().get("id"))) present = true;
+			}
+			if (!present) operators.add(candidate.deepCopy());
+		}
 	}
 
 	static JsonObject arrivals(Simulator simulator, long timestamp, BlueMapRoutePolicy.WorldSelection selection) {
@@ -263,6 +341,7 @@ final class BlueMapSnapshot {
 			entry.addProperty("routeId", display.id);
 			entry.addProperty("routeName", display.name);
 			entry.addProperty("color", display.color);
+			addOperator(entry, display.operator(arrival.getRouteId()));
 			entry.addProperty("sourceRouteId", Long.toUnsignedString(arrival.getRouteId()));
 			final BlueMapRoutePolicy.Service service = display.service(arrival.getRouteId(), arrival.getRouteName());
 			entry.addProperty("serviceId", service.id);
@@ -327,6 +406,7 @@ final class BlueMapSnapshot {
 		private final Map<String, RailSpan> spans = new LinkedHashMap<>();
 		private final Set<String> stations = new LinkedHashSet<>();
 		private final Map<String, JsonObject> services = new LinkedHashMap<>();
+		private final JsonArray operators = new JsonArray();
 		private int missingLegs;
 
 		private RouteGeometry(BlueMapRoutePolicy.DisplayRoute display) {
@@ -344,6 +424,7 @@ final class BlueMapSnapshot {
 			result.addProperty("id", display.id);
 			result.addProperty("name", display.name);
 			result.addProperty("color", display.color);
+			result.add("operators", operators);
 			result.addProperty("geometry", "rail-path");
 			result.addProperty("missingLegs", missingLegs);
 			final JsonArray paths = new JsonArray();

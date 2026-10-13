@@ -242,6 +242,7 @@ public final class BlueMapLiveBridge {
 				final JsonObject world = new JsonObject();
 				world.addProperty("worldId", simulator.dimension);
 				world.add("routes", new JsonArray());
+				world.add("stations", new JsonArray());
 				routeCatalogs.put(simulator.dimension, world);
 			}
 		}

@@ -195,6 +195,10 @@ public final class BlueMapSnapshotTest {
 		assertEquals("쾌속", train.get("serviceName").getAsString());
 		assertFalse(train.get("showServiceName").getAsBoolean());
 		assertEquals(Long.toUnsignedString(route.getId()), train.get("sourceRouteId").getAsString());
+		final var operated = configuredSelection(data, "{\"routes\":[\"" + Long.toUnsignedString(route.getId()) + "\"],\"routeOperators\":{\"" + Long.toUnsignedString(route.getId()) + "\":\"a\"}}");
+		final JsonObject operatedTrain = new BlueMapSnapshot().vehicles(data, 1237, operated).getAsJsonArray("vehicles").get(0).getAsJsonObject();
+		assertEquals("a", operatedTrain.get("operatorId").getAsString());
+		assertEquals("Operator A", operatedTrain.get("operatorName").getAsString());
 	}
 
 	@Test
@@ -415,6 +419,98 @@ public final class BlueMapSnapshotTest {
 			assertFalse(arrival.get("showServiceName").getAsBoolean());
 		}
 		assertEquals(originalCatalog, BlueMapSnapshot.routeCatalog(data, "minecraft/overworld").toString());
+	}
+
+	@Test
+	public void groupedOperatorsUnionWithoutLeakingOtherStationsOperatorsAndArrivalsUseSourceOverride() {
+		final ClientData data = new ClientData();
+		final Station first = station(data, "A only");
+		final Station second = station(data, "B only");
+		final Station shared = station(data, "Both");
+		final Platform pa = platform(data, first, new Position(0, 60, 0), new Position(20, 60, 0));
+		final Platform pb = platform(data, second, new Position(30, 70, 0), new Position(50, 70, 0));
+		final Platform ps = platform(data, shared, new Position(60, 80, 0), new Position(80, 80, 0));
+		final Route a = route(data, "A", pa, ps);
+		final Route b = route(data, "B", pb, ps);
+		final var selection = configuredSelection(data, "{\"groups\":[{\"id\":\"line\",\"name\":\"Line\",\"operatorId\":\"a\",\"services\":[{\"id\":\"local\",\"name\":\"Local\",\"routeIds\":[\"" + Long.toUnsignedString(a.getId()) + "\",\"" + Long.toUnsignedString(b.getId()) + "\"]}]}],\"routeOperators\":{\"" + Long.toUnsignedString(b.getId()) + "\":\"b\"}}");
+		final JsonObject output = BlueMapSnapshot.infrastructure(data, 100, selection);
+		final JsonObject line = output.getAsJsonArray("routes").get(0).getAsJsonObject();
+		assertEquals(2, line.getAsJsonArray("operators").size());
+		assertEquals(2, line.getAsJsonArray("services").get(0).getAsJsonObject().getAsJsonArray("operators").size());
+		for (var element : output.getAsJsonArray("stations")) {
+			final JsonObject station = element.getAsJsonObject();
+			final JsonArray operators = station.getAsJsonArray("services").get(0).getAsJsonObject().getAsJsonArray("operators");
+			final String name = station.get("name").getAsString();
+			assertEquals(name.equals("Both") ? 2 : 1, operators.size());
+			if (!name.equals("Both")) assertEquals(name.startsWith("A") ? "a" : "b", operators.get(0).getAsJsonObject().get("id").getAsString());
+		}
+		final JsonArray arrivals = BlueMapSnapshot.filterArrivals(List.of(
+				new ArrivalResponse("A destination", 11000, 11500, 0, true, 0, 0, a, pa),
+				new ArrivalResponse("B destination", 12000, 12500, 0, true, 0, 0, b, pb)
+		), Map.of(pa.getId(), pa, pb.getId(), pb), selection, 10000, 1000000);
+		assertEquals("a", arrivals.get(0).getAsJsonObject().get("operatorId").getAsString());
+		assertEquals("b", arrivals.get(1).getAsJsonObject().get("operatorId").getAsString());
+		assertEquals("Operator B", arrivals.get(1).getAsJsonObject().get("operatorName").getAsString());
+		assertFalse(output.toString().contains("Unused operator"));
+	}
+
+	@Test
+	public void explicitInterchangesLinkOnlyPublicMembersAndRetainPhysicalStationsAndArrivals() {
+		final ClientData data = new ClientData();
+		final Station first = station(data, "수인");
+		final Station second = station(data, "수인");
+		final Station secret = station(data, "Private member");
+		final Platform pa = platform(data, first, new Position(0, 60, 0), new Position(20, 60, 0));
+		final Platform pb = platform(data, second, new Position(100, 80, 0), new Position(120, 80, 0));
+		final Platform pc = platform(data, secret, new Position(200, 90, 0), new Position(220, 90, 0));
+		final Route a = route(data, "Line A", pa);
+		final Route b = route(data, "Line B", pb);
+		route(data, "Private line", pc);
+		final String aId = Long.toUnsignedString(a.getId());
+		final String bId = Long.toUnsignedString(b.getId());
+		final String firstId = Long.toUnsignedString(first.getId());
+		final String secondId = Long.toUnsignedString(second.getId());
+		final String secretId = Long.toUnsignedString(secret.getId());
+		final String links = "\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인 환승\",\"stationIds\":[\"" + firstId + "\",\"" + secondId + "\",\"" + secretId + "\"]}]";
+		final var selected = configuredSelection(data, "{\"routes\":[\"" + aId + "\",\"" + bId + "\"]," + links + "}");
+		final JsonObject output = BlueMapSnapshot.infrastructure(data, 100, selected);
+		assertEquals(2, output.getAsJsonArray("stations").size());
+		for (var element : output.getAsJsonArray("stations")) {
+			final JsonObject station = element.getAsJsonObject();
+			final boolean isFirst = station.get("id").getAsString().equals(firstId);
+			assertEquals("interchange:suin", station.get("interchangeId").getAsString());
+			assertEquals("수인 환승", station.get("interchangeName").getAsString());
+			assertEquals(1, station.getAsJsonArray("routes").size());
+			assertEquals(isFirst ? aId : bId, station.getAsJsonArray("routes").get(0).getAsString());
+			assertEquals(1, station.getAsJsonArray("transferStationIds").size());
+			assertEquals(isFirst ? secondId : firstId, station.getAsJsonArray("transferStationIds").get(0).getAsString());
+			assertEquals(isFirst ? 60 : 80, station.getAsJsonArray("position").get(1).getAsDouble());
+		}
+		assertFalse(output.toString().contains(secretId));
+		assertFalse(output.toString().contains("Private"));
+		final JsonArray arrivals = BlueMapSnapshot.filterArrivals(List.of(
+				new ArrivalResponse("A", 11000, 11500, 0, true, 0, 0, a, pa),
+				new ArrivalResponse("B", 12000, 12500, 0, true, 0, 0, b, pb)
+		), Map.of(pa.getId(), pa, pb.getId(), pb), selected, 10000, 1000000);
+		assertEquals(firstId, arrivals.get(0).getAsJsonObject().get("stationId").getAsString());
+		assertEquals(secondId, arrivals.get(1).getAsJsonObject().get("stationId").getAsString());
+		final JsonObject legacy = BlueMapSnapshot.infrastructure(data, 101, selection(data, List.of(a, b), false));
+		assertFalse(legacy.toString().contains("interchange")); // Same name alone is not a link.
+		final JsonObject revoked = BlueMapSnapshot.infrastructure(data, 102, configuredSelection(data, "{\"routes\":[\"" + aId + "\"]," + links + "}"));
+		assertEquals(1, revoked.getAsJsonArray("stations").size());
+		assertFalse(revoked.toString().contains("interchange"));
+		assertFalse(revoked.toString().contains(secondId));
+		final JsonObject catalog = BlueMapSnapshot.routeCatalog(data, "minecraft/overworld");
+		assertEquals(3, catalog.getAsJsonArray("stations").size());
+		for (var element : catalog.getAsJsonArray("stations")) {
+			final JsonObject station = element.getAsJsonObject();
+			assertEquals(1, station.getAsJsonArray("routeIds").size());
+		}
+	}
+
+	private static BlueMapRoutePolicy.WorldSelection configuredSelection(ClientData data, String worldSettings) {
+		final String content = "{\"schema\":1,\"operators\":{\"a\":{\"name\":\"Operator A\"},\"b\":{\"name\":\"Operator B\"},\"unused\":{\"name\":\"Unused operator\"}},\"worlds\":{\"minecraft/overworld\":" + worldSettings + "}}";
+		return BlueMapRoutePolicy.parse(content, Map.of("minecraft/overworld", BlueMapSnapshot.routeCatalog(data, "minecraft/overworld"))).world("minecraft/overworld");
 	}
 
 	private static JsonObject service(String id, String name, boolean showName, Route... routes) {

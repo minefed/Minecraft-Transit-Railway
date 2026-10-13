@@ -10,7 +10,7 @@ html,body,#map { margin:0;width:100%;height:100%;overflow:hidden;font-family:sys
 </style>
 <div id="map"></div>
 <div class="qa"><strong>MTR × BlueMap · 합성 데이터 검증</strong><p>마우스로 회전·확대합니다. 실제 서버 데이터가 아닙니다.</p>
-<button id="close">근거리 3D</button><button id="city">도시 전체</button><button id="pause">서버 응답 중단</button><button id="switch">지도 전환</button><button id="public">공개 노선 비우기</button>
+<button id="close">근거리 3D</button><button id="city">도시 전체</button><button id="interchange">간접환승 예시</button><button id="pause">서버 응답 중단</button><button id="switch">지도 전환</button><button id="public">공개 노선 비우기</button>
 <p class="note">실제 BlueMap HtmlMarker/CSS2DRenderer와 로컬 Three.js 사용 · 외부 네트워크 없음</p></div>
 <script type="module">
 import * as THREE from '/vendor/three.js';
@@ -39,12 +39,19 @@ const rails={schema:1,rails:[{id:'loop',points},{id:'branch',points:branch}],rou
 {id:'group:jungang',name:'중앙선',color:'#317fce',paths:[points],stations:['a','b','c','d'],services:[{id:'jungang-local',name:'일반',color:'#317fce'},{id:'jungang-express',name:'급행',color:'#317fce'}]},
 {id:'group:coast',name:'해안선',color:'#3ba879',paths:[branch],stations:['a','e','f','g'],services:[{id:'coast-local',name:'일반',color:'#3ba879'}]}],stations:[
 {id:'a',name:'중앙역',position:ellipse(0),routes:['group:jungang','group:coast'],services:[{id:'jungang-local',name:'중앙선 일반',routeId:'group:jungang'},{id:'jungang-express',name:'중앙선 급행',routeId:'group:jungang'},{id:'coast-local',name:'해안선 일반',routeId:'group:coast'}]},
-{id:'b',name:'시청역',position:ellipse(Math.PI/2),routes:['group:jungang'],services:[{id:'jungang-local',name:'일반',routeId:'group:jungang'},{id:'jungang-express',name:'급행',routeId:'group:jungang'}]},
+{id:'b',name:'수인역',position:ellipse(Math.PI/2),routes:['group:jungang'],interchangeId:'interchange:suin',interchangeName:'수인역',transferStationIds:['f'],services:[{id:'jungang-local',name:'일반',routeId:'group:jungang'},{id:'jungang-express',name:'급행',routeId:'group:jungang'}]},
 {id:'c',name:'강변역',position:ellipse(Math.PI),routes:['group:jungang']},{id:'d',name:'공원역',position:ellipse(Math.PI*1.5),routes:['group:jungang']},
-{id:'e',name:'서부역',position:branch[0],routes:['group:coast']},{id:'f',name:'환승 <역>',position:branch[50],routes:['group:coast']},{id:'g',name:'동부역',position:branch[100],routes:['group:coast']}]};
+{id:'e',name:'서부역',position:branch[0],routes:['group:coast']},{id:'f',name:'수인역',position:branch[50],routes:['group:coast'],interchangeId:'interchange:suin',interchangeName:'수인역',transferStationIds:['b']},{id:'g',name:'동부역',position:branch[100],routes:['group:coast']}]};
+rails.routes[0].operators=[{id:'central-rail',name:'중앙철도'}];
+rails.routes[1].operators=[{id:'coast-rail',name:'해안철도'}];
+for(const route of rails.routes) for(const service of route.services) service.operators=route.operators;
+for(const station of rails.stations) {
+    if(!station.services) station.services=station.routes.map(routeId=>({id:`${routeId}-local`,name:'일반',routeId}));
+    for(const service of station.services) service.operators=rails.routes.find(route=>route.id===service.routeId)?.operators || [];
+}
 let paused=false, frozen=null, emptyPublic=false, revision=1;
 const start=Date.now();
-function vehicles(){const time=(Date.now()-start)/1000;return {schema:1,publicationRevision:`demo-${revision}`,timestamp:Date.now(),vehicles:emptyPublic?[]:[0,1,2,3].map((n)=>({id:`train-${n}`,routeId:'group:jungang',routeName:'중앙선',sourceRouteId:n%2?'jungang-express':'jungang-local',serviceName:n%2?'급행':'일반',color:'#317fce',cars:Array.from({length:4},(_,i)=>{const t=time*0.026+n*Math.PI/2-i*0.092;const p=ellipse(t),next=ellipse(t+0.001);const dx=next[0]-p[0],dy=next[1]-p[1],dz=next[2]-p[2];return{id:n===3?'custom-unknown':'demo-model',position:p,yaw:Math.atan2(dx,dz),pitch:-Math.atan2(dy,Math.hypot(dx,dz)),length:18,width:3.1}})})),arrivals:emptyPublic?[]:['a','b'].flatMap(stationId=>[0,1,2].map(n=>({stationId,platformId:`${n+1}`,routeId:n===2?'group:coast':'group:jungang',sourceRouteId:n===2?'coast-local':n?'jungang-express':'jungang-local',serviceName:n===1?'급행':'일반',destination:n===2?'동부역':'강변역',arrivalTime:start+Math.floor(time/360)*360000+[-10000,95000,210000][n],departureTime:start+Math.floor(time/360)*360000+[40000,125000,240000][n],vehicleId:`arrival-${n}`,realtime:n!==2,terminating:false})))};}
+function vehicles(){const time=(Date.now()-start)/1000;return {schema:1,publicationRevision:`demo-${revision}`,timestamp:Date.now(),vehicles:emptyPublic?[]:[0,1,2,3].map((n)=>({id:`train-${n}`,routeId:'group:jungang',routeName:'중앙선',operatorId:'central-rail',operatorName:'중앙철도',sourceRouteId:n%2?'jungang-express':'jungang-local',serviceName:n%2?'급행':'일반',color:'#317fce',cars:Array.from({length:4},(_,i)=>{const t=time*0.026+n*Math.PI/2-i*0.092;const p=ellipse(t),next=ellipse(t+0.001);const dx=next[0]-p[0],dy=next[1]-p[1],dz=next[2]-p[2];return{id:n===3?'custom-unknown':'demo-model',position:p,yaw:Math.atan2(dx,dz),pitch:-Math.atan2(dy,Math.hypot(dx,dz)),length:18,width:3.1}})})),arrivals:emptyPublic?[]:['a','b','f'].flatMap(stationId=>(stationId==='f'?[2]:stationId==='b'?[0,1]:[0,1,2]).map(n=>({stationId,platformId:`${n+1}`,routeId:n===2?'group:coast':'group:jungang',operatorId:n===2?'coast-rail':'central-rail',operatorName:n===2?'해안철도':'중앙철도',sourceRouteId:n===2?'coast-local':n?'jungang-express':'jungang-local',serviceName:n===1?'급행':'일반',destination:n===2?'동부역':'강변역',arrivalTime:start+Math.floor(time/360)*360000+[-10000,95000,210000][n],departureTime:start+Math.floor(time/360)*360000+[40000,125000,240000][n],vehicleId:`arrival-${n}`,realtime:n!==2,terminating:false})))};}
 const nativeFetch=window.fetch.bind(window);
 window.fetch=async(url,options)=>{if(!String(url).includes('/mtr-live/'))return nativeFetch(url,options);let data;
 if(String(url).endsWith('index.json'))data={schema:1,maps:{demo:{worldId:'synthetic',vehicles:'mtr-live/demo-vehicles.json',rails:'mtr-live/demo-rails.json'},other:{worldId:'empty',vehicles:'mtr-live/other-vehicles.json',rails:'mtr-live/other-rails.json'}},catalog:'mtr-live/catalog.json'};
@@ -60,6 +67,7 @@ draw();
 window.addEventListener('resize',()=>{camera.aspect=innerWidth/innerHeight;camera.updateProjectionMatrix();renderer.setSize(innerWidth,innerHeight);css.setSize(innerWidth,innerHeight)});
 document.getElementById('close').onclick=()=>{controls.target.set(100,0,75);camera.position.set(250,130,240);controls.update()};
 document.getElementById('city').onclick=()=>{controls.target.set(0,0,0);camera.position.set(550,1400,1300);controls.update()};
+document.getElementById('interchange').onclick=()=>{const overlay=window.minefedMtrOverlay,station=overlay?.stationCatalog.get('b');if(station)overlay.showStationDetail(station)};
 document.getElementById('pause').onclick=event=>{paused=!paused;frozen=vehicles();event.target.textContent=paused?'서버 응답 재개':'서버 응답 중단'};
 document.getElementById('switch').onclick=()=>{viewer.map={data:{id:viewer.map.data.id==='demo'?'other':'demo'}};events.dispatchEvent(new CustomEvent('bluemapMapChanged',{detail:{map:viewer.map}}))};
 document.getElementById('public').onclick=event=>{emptyPublic=!emptyPublic;revision++;event.target.textContent=emptyPublic?'공개 노선 복원':'공개 노선 비우기'};

@@ -1,7 +1,7 @@
 /* Run with node --test tools/bluemap/mtr-live.test.cjs. No third-party dependencies. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SnapshotBuffer, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
+const { SnapshotBuffer, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
 
 const vehicle = (x = 0, yaw = 0, id = 'custom:unlisted', extra = {}) => ({ id: 'fleet-1', routeName: '<img src=x onerror=alert(1)>', color: '#3F81DA', cars: [{ id, position: [x, 64, -20], yaw, pitch: 0, length: 24, width: 3.2 }], ...extra });
 const snapshot = (timestamp, vehicles = [vehicle()]) => ({ schema: 1, timestamp, vehicles });
@@ -174,6 +174,42 @@ test('shared service IDs deduplicate independently of source routes and name vis
     assert.equal(arrivals[1].showServiceName,false);
 });
 
+test('operators are optional, normalized and combined for shared services without inventing names', () => {
+    const company={id:'company',name:'<운영사>'}, other={id:'other',name:'다른 운영사'};
+    const input=[company,company,null,{id:'missing-name'},{id:3,name:'bad'},{id:'blank',name:'  '}];
+    assert.deepEqual(uniqueOperators(input),[company]);
+    const routes=publicRoutes([{id:'old'},{id:'new',operators:input}]);
+    assert.deepEqual(routes.get('old').operators,[]);
+    assert.deepEqual(routes.get('new').operators,[company]);
+    const services=uniqueServices([{id:'shared',operators:[company]},{id:'shared',operators:[other,company]}]);
+    assert.deepEqual(services[0].operators,[company,other]);
+    const car=normalizeSnapshot(snapshot(1,[vehicle(0,0,'model',{operatorId:company.id,operatorName:company.name})])).cars.get('fleet-1:0');
+    assert.equal(car.operatorId,company.id); assert.equal(car.operatorName,company.name);
+    assert.equal(normalizeSnapshot(snapshot(1)).cars.get('fleet-1:0').operatorName,'');
+});
+
+test('only configured public peers create indirect transfers, including a shared display route', () => {
+    const routes=publicRoutes([{id:'red'},{id:'blue'}]);
+    const a={id:'a',name:'수인역',routes:['red']}, b={id:'b',name:'수인역',routes:['blue']};
+    const stations=new Map([[a.id,a],[b.id,b],['private',{id:'private',routes:['secret'],interchangeId:'interchange:suin'}],['unrelated',{id:'unrelated',routes:['blue']}] ]);
+    assert.equal(stationConnections(a,stations,routes).interchange,false);
+    Object.assign(a,{interchangeId:'interchange:suin',transferStationIds:['b','b','a','private','missing','unrelated']});
+    b.interchangeId=a.interchangeId;
+    const connected=stationConnections(a,stations,routes);
+    assert.equal(connected.interchange,true);
+    assert.deepEqual(connected.direct.map(route=>route.id),['red']);
+    assert.deepEqual(connected.peers.map(station=>station.id),['b']);
+    assert.deepEqual(connected.routes.map(route=>route.id),['red','blue']);
+    b.routes=['red'];
+    a.services=[{id:'local-a',routeId:'red',operators:[{id:'a-op',name:'운영사 A'}]}];
+    b.services=[{id:'local-b',routeId:'red',operators:[{id:'b-op',name:'운영사 B'}]}];
+    assert.equal(stationConnections(a,stations,routes).interchange,true);
+    assert.equal(stationConnections(a,stations,routes).routes.length,1);
+    assert.deepEqual(stationConnections(a,stations,routes).routes[0].operators.map(operator=>operator.id),['a-op','b-op']);
+    stations.delete('b');
+    assert.equal(stationConnections(a,stations,routes).interchange,false);
+});
+
 test('ETA keeps trains until predicted departure, excludes past forecasts and respects stale data', () => {
     const data = [
         {stationId:'a',arrivalTime:900,departureTime:1200,vehicleId:'stopped',realtime:true},
@@ -205,7 +241,7 @@ test('publication change drops all visible objects, ETA, selection and blocks an
         generation:1,disposed:false,publicationRevision:'old',staticVersion:1,now:()=>0,
         json:()=>new Promise(resolve=>{resolveOld=resolve}),buffer:new SnapshotBuffer(),cars:new Map([['old',{}]]),
         trainGroup:{clear(){}},loadedChunks:new Map([['old',{}]]),chunks:new Map([['old',{}]]),
-        loadedRouteChunks:new Map([['old',{}]]),routeChunks:new Map([['old',{}]]),stationData:[{id:'old'}],
+        loadedRouteChunks:new Map([['old',{}]]),routeChunks:new Map([['old',{}]]),stationData:[{id:'old'}],stationCatalog:new Map([['old',{id:'old',interchangeId:'interchange:old'}]]),
         removeRailChunk(){},clearTrainDots(){},clearStations(){},updateRouteLegend(){},clearDetail(){this.selection=null},leave(){},selection:'private',
         arrivals:[{stationId:'old'}],arrivalsFreshAt:100
     };
@@ -215,6 +251,7 @@ test('publication change drops all visible objects, ETA, selection and blocks an
     await pending;
     assert.equal(state.cars.size,0); assert.equal(state.chunks.size,0); assert.equal(state.routeChunks.size,0);
     assert.deepEqual(state.stationData,[]); assert.deepEqual(state.arrivals,[]); assert.equal(state.selection,null);
+    assert.equal(state.stationCatalog.size,0);
     assert.equal(state.publicationRevision,'new'); assert.equal(state.lastRailsAt,-Infinity);
 });
 
@@ -263,6 +300,28 @@ test('shared route paths have separated ribbons even when traversed in opposite 
     assert.ok(Math.abs(actualZ[0] - actualZ[1]) > 0.8);
 });
 
+test('operator and interchange changes refresh station selection and remove vanished peers', async () => {
+    const a={id:'a',name:'수인역',position:[0,0,0],routes:['r'],interchangeId:'suin',transferStationIds:['b']};
+    const b={id:'b',name:'수인역',position:[4,0,0],routes:['r'],interchangeId:'suin',transferStationIds:['a']};
+    const data={schema:1,publicationRevision:'current',rails:[],routes:[{id:'r',operators:[{id:'company',name:'이전 운영사'}]}],stations:[a,b]};
+    let refreshed=0, cleared=0;
+    const state={
+        generation:1,disposed:false,staticVersion:1,publicationRevision:'current',now:()=>1000,json:async()=>structuredClone(data),
+        loadedChunks:new Map(),loadedRouteChunks:new Map(),removeRailChunk(){},clearStations(){},updateRouteLegend(){},selectedStation:a,
+        showStationDetail(station){this.selectedStation=station;refreshed++},clearDetail(){this.selectedStation=null;cleared++}
+    };
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    assert.equal(refreshed,1); assert.equal(state.stationCatalog.size,2);
+    data.routes[0].operators[0].name='새 운영사'; data.stations=[{...a,transferStationIds:[]}];
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    assert.equal(refreshed,2); assert.equal(state.stationCatalog.has('b'),false);
+    assert.deepEqual(state.selectedStation.transferStationIds,[]);
+    assert.equal(state.routeCatalog.get('r').operators[0].name,'새 운영사');
+    data.stations=[];
+    await Overlay.prototype.refreshRails.call(state,1,'mtr-live/rails.json');
+    assert.equal(cleared,1); assert.equal(state.selectedStation,null);
+});
+
 // A strict DOM double catches accidental HTML parsing without adding browser/test dependencies to Gradle.
 class ElementDouble {
     constructor(tag) { this.tagName=tag;this.children=[];this.attributes=new Map();this.listeners=new Map();this._text='';this.className='';this.style={setProperty(name,value){this[name]=value}};this.classList={toggle:(name,on)=>{const classes=new Set(this.className.split(' ').filter(Boolean));if(on)classes.add(name);else classes.delete(name);this.className=[...classes].join(' ')}}; }
@@ -284,6 +343,88 @@ function withDocument(callback) {
     global.document={createElement:tag=>new ElementDouble(tag),createElementNS:(_namespace,tag)=>new ElementDouble(tag),createTextNode:text=>{const node=new ElementDouble('#text');node.textContent=text;return node}};
     try { callback(); } finally {global.document=previous;}
 }
+
+test('operator labels stay inert in legend and cards, and train/ETA use the source operator', () => withDocument(() => {
+    const company={id:'red-company',name:'<img src=x onerror=alert(1)>'}, other={id:'blue-company',name:'해안철도'};
+    const routes=[{id:'group:joint',name:'공동 운행선',operators:[company,other]}];
+    const overlay=Object.assign(Object.create(Overlay.prototype),{
+        detail:new ElementDouble('section'),routeLegend:new ElementDouble('ul'),routeCatalog:publicRoutes(routes),
+        now:()=>1000,buffer:{offset:-99000,isStale:()=>false},arrivalsFreshAt:1000,
+        arrivals:[{stationId:'a',routeId:'group:joint',arrivalTime:220000,operatorId:company.id,operatorName:company.name}]
+    });
+    overlay.updateRouteLegend(routes);
+    assert.ok(overlay.routeLegend.textContent.includes(company.name));
+    assert.ok(overlay.routeLegend.textContent.includes(other.name));
+    overlay.showStationDetail({id:'a',name:'중앙역',routes:['group:joint'],services:[{id:'local',routeId:'group:joint',operators:[company],showName:false}]});
+    assert.ok(overlay.detail.textContent.includes(company.name));
+    assert.ok(!overlay.detail.textContent.includes(other.name));
+    assert.ok(overlay.arrivalsElement.textContent.includes(company.name));
+    const previous=overlay.arrivalsSignature;
+    overlay.arrivals[0]={...overlay.arrivals[0],operatorId:other.id,operatorName:other.name};
+    overlay.updateArrivals();
+    assert.notEqual(overlay.arrivalsSignature,previous);
+    assert.ok(!overlay.arrivalsElement.textContent.includes(company.name));
+    assert.ok(overlay.arrivalsElement.textContent.includes(other.name));
+    const car=normalizeSnapshot(snapshot(1,[vehicle(0,0,'known',{routeId:'group:joint',routeName:'공동 운행선',operatorId:company.id,operatorName:company.name})])).cars.get('fleet-1:0');
+    overlay.showTrainDetail(car);
+    assert.ok(overlay.detail.textContent.includes(company.name));
+    assert.ok(!overlay.detail.textContent.includes(other.name));
+    overlay.showTrainDetail({...car,operatorId:'',operatorName:''});
+    assert.ok(!overlay.detail.textContent.includes(company.name));
+    assert.ok(!overlay.detail.textContent.includes(other.name));
+    overlay.showStationDetail({id:'a',name:'중앙역',routes:['group:joint'],services:[{id:'unassigned',routeId:'group:joint',operators:[]}]});
+    const chips=overlay.detail.children.find(child=>child.className==='mtr-chips');
+    assert.ok(!chips.textContent.includes(company.name));
+    assert.ok(!chips.textContent.includes(other.name));
+}));
+
+test('indirect interchange cards separate each physical station and only change ETA after selection', () => withDocument(() => {
+    const routes=[{id:'red',name:'중앙선',operators:[{id:'red-op',name:'중앙철도'}]},{id:'blue',name:'해안선',operators:[{id:'blue-op',name:'해안철도'}]}];
+    const a={id:'a',name:'수인역',routes:['red'],services:[{id:'red-service',routeId:'red',operators:routes[0].operators}],interchangeId:'interchange:suin',interchangeName:'수인 <환승>',transferStationIds:['b','private']};
+    const b={id:'b',name:'수인역',routes:['blue'],services:[{id:'blue-service',routeId:'blue',operators:routes[1].operators}],interchangeId:'interchange:suin',interchangeName:'수인 <환승>',transferStationIds:['a']};
+    const overlay=Object.assign(Object.create(Overlay.prototype),{
+        detail:new ElementDouble('section'),routeCatalog:publicRoutes(routes),stationCatalog:new Map([['a',a],['b',b]]),
+        now:()=>1000,buffer:{offset:-99000,isStale:()=>false},arrivalsFreshAt:1000,
+        arrivals:[{stationId:'a',routeId:'red',arrivalTime:220000,destination:'중앙 종점',vehicleId:'a-train'},
+            {stationId:'b',routeId:'blue',arrivalTime:160000,destination:'해안 종점',vehicleId:'b-train'}]
+    });
+    overlay.showStationDetail(a);
+    assert.ok(overlay.detail.textContent.includes('간접환승'));
+    assert.ok(overlay.detail.textContent.includes('수인 <환승>'));
+    const directChips=overlay.detail.children.find(child=>child.className==='mtr-chips');
+    assert.ok(directChips.textContent.includes('중앙선')); assert.ok(!directChips.textContent.includes('해안선'));
+    assert.ok(overlay.arrivalsElement.textContent.includes('중앙 종점')); assert.ok(!overlay.arrivalsElement.textContent.includes('해안 종점'));
+    const section=overlay.detail.children.find(child=>child.className==='mtr-interchanges');
+    const buttons=section.children.filter(child=>child.className==='mtr-interchange-station');
+    assert.equal(buttons.length,1); assert.ok(buttons[0].textContent.includes('해안철도'));
+    assert.ok(buttons[0].getAttribute('aria-label').includes('해안선'));
+    buttons[0].listeners.get('click')();
+    assert.equal(overlay.selectedStation.id,'b');
+    assert.ok(overlay.arrivalsElement.textContent.includes('해안 종점')); assert.ok(!overlay.arrivalsElement.textContent.includes('중앙 종점'));
+    overlay.stationCatalog.delete('a'); overlay.showStationDetail(b);
+    assert.ok(!overlay.detail.textContent.includes('간접환승'));
+    assert.equal(overlay.detail.children[0].children[0].textContent,'철도역');
+}));
+
+test('configured transfer marker includes partner lines without requiring different route IDs', () => withDocument(() => {
+    const previous=global.BlueMap;
+    class GroupDouble { constructor(){this.userData={};this.position={fromArray(){}};this.children=[]} add(child){this.children.push(child)} }
+    class MarkerDouble extends GroupDouble { constructor(){super();this.element=new ElementDouble('div')} }
+    global.BlueMap={HtmlMarker:MarkerDouble};
+    try {
+        const a={id:'a',name:'수인역',position:[0,0,0],routes:['red'],interchangeId:'suin',transferStationIds:['b']};
+        const b={id:'b',name:'수인역',position:[4,0,0],routes:['red'],interchangeId:'suin',transferStationIds:['a']};
+        const overlay=Object.assign(Object.create(Overlay.prototype),{
+            THREE:{Group:GroupDouble,Mesh:GroupDouble},stationsGroup:new GroupDouble(),stations:new Map(),material(){},
+            routeCatalog:publicRoutes([{id:'red',name:'중앙선'}]),stationCatalog:new Map([['a',a],['b',b]])
+        });
+        assert.ok(overlay.createStation(a).userData.labelElement.className.includes('mtr-station--transfer'));
+        const unconfigured={...a,interchangeId:undefined};
+        assert.ok(!overlay.createStation(unconfigured).userData.labelElement.className.includes('mtr-station--transfer'));
+        overlay.stationCatalog.delete('b');
+        assert.ok(!overlay.createStation(a).userData.labelElement.className.includes('mtr-station--transfer'));
+    } finally {global.BlueMap=previous;}
+}));
 
 test('hidden service names disappear from legend, station and train cards without hiding their route or arrival', () => withDocument(() => {
     const services=[

@@ -244,6 +244,143 @@ public final class BlueMapRoutePolicyTest {
 				+ "{\"id\":\"metro\",\"name\":\"B\",\"routeIds\":[\"2\"]}]}"));
 	}
 
+	@Test
+	public void operatorsAreOptionalAndRouteOverridesPreserveGroupAndServiceIdentity() {
+		assertNull(policy("{\"routes\":[\"1\"]}").world("world-a").route(1).operator(1));
+		final var standalone = operatorPolicy("{\"routes\":[\"1\"],\"routeOperators\":{\"1\":\"metro\"}}").world("world-a").route(1);
+		assertEquals("metro", standalone.operator(1).id);
+		assertEquals("Metro operator", standalone.operator(1).name);
+		assertNull(standalone.operator(2));
+		final String configuration = "{\"groups\":[{\"id\":\"line\",\"name\":\"Line\",\"operatorId\":\"metro\",\"routeIds\":[\"1\"],\"services\":[{\"id\":\"rapid\",\"name\":\"Rapid\",\"routeIds\":[\"2\",\"" + MAX_UNSIGNED + "\"]}]}],\"routeOperators\":{\"2\":\"regional\"}}";
+		final var selection = operatorPolicy(configuration).world("world-a");
+		final var group = selection.route(1);
+		assertSame(group, selection.route(2));
+		assertSame(group, selection.route(-1));
+		assertEquals("group:line", group.id);
+		assertEquals("metro", group.operator(1).id);
+		assertEquals("regional", group.operator(2).id);
+		assertEquals("Regional operator", group.operator(2).name);
+		assertEquals("metro", group.operator(-1).id);
+		assertEquals(group.service(2, "").id, group.service(-1, "").id);
+		final var partial = operatorPolicy(configuration.replace("\"operatorId\":\"metro\",", "")).world("world-a").route(1);
+		assertNull(partial.operator(1));
+		assertNotNull(partial.operator(2));
+		assertNull(partial.operator(-1));
+		assertEquals("metro", group.operator(1).id); // A later policy never mutates a previous revision.
+	}
+
+	@Test
+	public void operatorFingerprintTracksEffectiveValuesAndIgnoresUnusedDefinitions() {
+		final String configuration = "{\"schema\":1,\"operators\":{\"metro\":{\"name\":\"Metro\"},\"regional\":{\"name\":\"Regional\"}},\"worlds\":{\"world-a\":{\"routes\":[\"1\"],\"routeOperators\":{\"1\":\"metro\"}}}}";
+		final String original = BlueMapRoutePolicy.parse(configuration, catalogs()).fingerprint();
+		assertNotEquals(original, BlueMapRoutePolicy.parse(configuration.replace("Metro", "New Metro"), catalogs()).fingerprint());
+		assertNotEquals(original, BlueMapRoutePolicy.parse(configuration.replace("\"metro\"", "\"new-metro\""), catalogs()).fingerprint());
+		assertEquals(original, BlueMapRoutePolicy.parse(configuration.replace("Regional", "Unused rename"), catalogs()).fingerprint());
+		assertFalse(original.contains("Regional"));
+		assertEquals(policy("{}").fingerprint(), operatorPolicy("{}").fingerprint());
+		final String group = "{\"groups\":[{\"id\":\"line\",\"name\":\"Line\",\"operatorId\":\"metro\",\"routeIds\":[\"1\",\"2\"]}]}";
+		assertNotEquals(operatorPolicy(group).fingerprint(), operatorPolicy(group.replace("\"operatorId\":\"metro\"", "\"operatorId\":\"regional\"")).fingerprint());
+		assertEquals(operatorPolicy(group).fingerprint(), operatorPolicy(group.substring(0, group.length() - 1) + ",\"routeOperators\":{\"2\":\"metro\",\"1\":\"metro\"}}").fingerprint());
+	}
+
+	@Test
+	public void operatorDefinitionsRejectInvalidNamesIdsTypesAndDuplicateKeys() {
+		for (String operators : List.of(
+				"null", "[]", "true", "{\"UPPER\":{\"name\":\"Metro\"}}", "{\"\":{\"name\":\"Metro\"}}",
+				"{\"" + "x".repeat(65) + "\":{\"name\":\"Metro\"}}", "{\"metro\":null}", "{\"metro\":{}}",
+				"{\"metro\":{\"name\":null}}", "{\"metro\":{\"name\":42}}", "{\"metro\":{\"name\":\" \\t\\n\"}}",
+				"{\"metro\":{\"name\":\"" + "x".repeat(257) + "\"}}", "{\"metro\":{\"name\":\"Metro\",\"extra\":true}}",
+				"{\"metro\":{\"name\":\"First\"},\"metro\":{\"name\":\"Second\"}}")) {
+			assertThrows(IllegalArgumentException.class, () -> BlueMapRoutePolicy.parse("{\"schema\":1,\"operators\":" + operators + ",\"worlds\":{}}", catalogs()), operators);
+		}
+	}
+
+	@Test
+	public void operatorReferencesRequireKnownOperatorsAndSelectedCanonicalRouteIds() {
+		for (String overrides : List.of(
+				"null", "[]", "true", "{\"1\":\"unknown\"}", "{\"1\":null}", "{\"1\":42}", "{\"1\":{}}",
+				"{\"2\":\"metro\"}", "{\"999\":\"metro\"}", "{\"01\":\"metro\"}", "{\"0\":\"metro\"}",
+				"{\"18446744073709551616\":\"metro\"}", "{\"1\":\"metro\",\"1\":\"regional\"}")) {
+			assertThrows(IllegalArgumentException.class, () -> operatorPolicy("{\"routes\":[\"1\"],\"routeOperators\":" + overrides + "}"), overrides);
+		}
+		for (String operator : List.of("null", "true", "42", "{}", "[]", "\"\"", "\"unknown\"")) {
+			assertThrows(IllegalArgumentException.class, () -> operatorPolicy("{\"groups\":[{\"id\":\"line\",\"name\":\"Line\",\"routeIds\":[\"1\"],\"operatorId\":" + operator + "}]}"), operator);
+		}
+		assertThrows(IllegalArgumentException.class, () -> policy("{\"routes\":[\"1\"],\"routeOperators\":{\"1\":\"metro\"}}"));
+	}
+
+	@Test
+	public void interchangesSupportUnsignedAndUnpublishedStationsAndAreImmutable() {
+		final var selection = policy("{\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"" + MAX_UNSIGNED + "\"]}]}").world("world-a");
+		assertNull(selection.route(1)); // Membership cannot select a route for publication.
+		assertEquals(1, selection.interchanges().size());
+		final var interchange = selection.interchanges().get(0);
+		assertEquals("suin", interchange.id);
+		assertEquals("수인", interchange.name);
+		assertEquals(List.of("11", MAX_UNSIGNED), interchange.stationIds);
+		assertThrows(UnsupportedOperationException.class, () -> selection.interchanges().clear());
+		assertThrows(UnsupportedOperationException.class, () -> interchange.stationIds.add("12"));
+		assertTrue(BlueMapRoutePolicy.CLOSED.world("world-a").interchanges().isEmpty());
+		assertTrue(policy("{}").world("world-a").interchanges().isEmpty());
+	}
+
+	@Test
+	public void interchangeFingerprintTracksNamesIdsAndMembershipWithoutCatalogNames() {
+		final String world = "{\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"12\"]}]}";
+		final String original = policy(world).fingerprint();
+		assertNotEquals(original, policy(world.replace("수인", "수인 환승")).fingerprint());
+		assertNotEquals(original, policy(world.replace("suin", "new-suin")).fingerprint());
+		assertNotEquals(original, policy(world.replace("\"12\"", "\"" + MAX_UNSIGNED + "\"")).fingerprint());
+		assertNotEquals(original, policy("{}").fingerprint());
+		final Map<String, JsonObject> changedCatalogs = catalogs();
+		changedCatalogs.get("world-a").getAsJsonArray("stations").get(0).getAsJsonObject().addProperty("name", "Private station rename");
+		assertEquals(original, BlueMapRoutePolicy.parse("{\"schema\":1,\"worlds\":{\"world-a\":" + world + "}}", changedCatalogs).fingerprint());
+		assertFalse(original.contains("Private station rename"));
+	}
+
+	@Test
+	public void interchangeReferencesAndOperatorAssignmentsAreScopedToEachWorld() {
+		final Map<String, JsonObject> catalogs = catalogs();
+		catalogs.get("world-b").getAsJsonArray("stations").get(1).getAsJsonObject().addProperty("id", "21");
+		catalogs.get("world-b").getAsJsonArray("routes").get(1).getAsJsonObject().addProperty("id", "3");
+		final String configuration = "{\"schema\":1,\"operators\":{\"metro\":{\"name\":\"Metro\"}},\"worlds\":{\"world-a\":{\"routes\":[\"1\"],\"routeOperators\":{\"1\":\"metro\"},\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"12\"]}]},\"world-b\":{\"routes\":[\"1\"],\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인 B\",\"stationIds\":[\"11\",\"21\"]}]}}}";
+		final var policy = BlueMapRoutePolicy.parse(configuration, catalogs);
+		assertNotNull(policy.world("world-a").route(1).operator(1));
+		assertNull(policy.world("world-b").route(1).operator(1));
+		assertEquals("수인 B", policy.world("world-b").interchanges().get(0).name);
+		assertThrows(IllegalArgumentException.class, () -> BlueMapRoutePolicy.parse(configuration.replace("\"21\"", "\"12\""), catalogs));
+		assertThrows(IllegalArgumentException.class, () -> BlueMapRoutePolicy.parse(configuration.replace("\"world-b\":{\"routes\":[\"1\"]", "\"world-b\":{\"routes\":[\"1\"],\"routeOperators\":{\"2\":\"metro\"}"), catalogs));
+	}
+
+	@Test
+	public void interchangesRejectAmbiguousMembershipAndMalformedMetadata() {
+		for (String interchange : List.of(
+				"null", "{}", "{\"id\":\"suin\",\"name\":\"수인\"}",
+				"{\"id\":\"UPPER\",\"name\":\"수인\",\"stationIds\":[\"11\",\"12\"]}",
+				"{\"id\":\"suin\",\"name\":\" \",\"stationIds\":[\"11\",\"12\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"11\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"999\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[11,12]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"012\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"0\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"18446744073709551616\"]}",
+				"{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"12\"],\"extra\":true}")) {
+			assertThrows(IllegalArgumentException.class, () -> policy("{\"interchanges\":[" + interchange + "]}"), interchange);
+		}
+		for (String value : List.of("null", "{}", "true")) {
+			assertThrows(IllegalArgumentException.class, () -> policy("{\"interchanges\":" + value + "}"), value);
+		}
+		for (String secondId : List.of("suin", "other")) {
+			assertThrows(IllegalArgumentException.class, () -> policy("{\"interchanges\":[{\"id\":\"suin\",\"name\":\"수인\",\"stationIds\":[\"11\",\"12\"]},{\"id\":\"" + secondId + "\",\"name\":\"Other\",\"stationIds\":[\"12\",\"" + MAX_UNSIGNED + "\"]}]}"));
+		}
+	}
+
+	private static BlueMapRoutePolicy operatorPolicy(String world) {
+		return BlueMapRoutePolicy.parse("{\"schema\":1,\"operators\":{\"metro\":{\"name\":\"Metro operator\"},\"regional\":{\"name\":\"Regional operator\"}},\"worlds\":{\"world-a\":" + world + "}}", catalogs());
+	}
+
 	private static BlueMapRoutePolicy policy(String world) {
 		return BlueMapRoutePolicy.parse("{\"schema\":1,\"worlds\":{\"world-a\":" + world + "}}", catalogs());
 	}
@@ -266,6 +403,14 @@ public final class BlueMapRoutePolicyTest {
 		}
 		final JsonObject catalog = new JsonObject();
 		catalog.add("routes", routes);
+		final JsonArray stations = new JsonArray();
+		for (String id : List.of("11", "12", MAX_UNSIGNED)) {
+			final JsonObject station = new JsonObject();
+			station.addProperty("id", id);
+			station.addProperty("name", "Private station " + id);
+			stations.add(station);
+		}
+		catalog.add("stations", stations);
 		return catalog;
 	}
 }

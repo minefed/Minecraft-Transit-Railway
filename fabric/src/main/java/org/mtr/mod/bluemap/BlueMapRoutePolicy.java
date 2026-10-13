@@ -27,9 +27,18 @@ final class BlueMapRoutePolicy {
 	/** Catalogs stay private; only selected route metadata is retained by the bound policy. */
 	static BlueMapRoutePolicy parse(String content, Map<String, JsonObject> catalogs) {
 		final JsonObject root = object(parseStrict(content), "policy");
-		keys(root, "schema", "worlds");
+		keys(root, "schema", "worlds", "operators");
 		if (!root.has("schema") || !root.get("schema").isJsonPrimitive() || !root.get("schema").getAsJsonPrimitive().isNumber() || !root.get("schema").getAsString().equals("1")) {
 			throw invalid("schema must be 1");
+		}
+		final Map<String, Operator> operators = new LinkedHashMap<>();
+		if (root.has("operators")) {
+			for (Map.Entry<String, JsonElement> entry : object(root.get("operators"), "operators").entrySet()) {
+				final String id = slug(entry.getKey(), "operator id");
+				final JsonObject operator = object(entry.getValue(), "operator " + id);
+				keys(operator, "name");
+				operators.put(id, new Operator(id, name(operator.get("name"), "operator.name")));
+			}
 		}
 		final JsonObject configuredWorlds = object(root.get("worlds"), "worlds");
 		final Map<String, WorldSelection> worlds = new LinkedHashMap<>();
@@ -45,16 +54,26 @@ final class BlueMapRoutePolicy {
 				available.put(route.get("id").getAsString(), route);
 			}
 			final JsonObject configuration = object(worldEntry.getValue(), worldId);
-			keys(configuration, "routes", "groups");
+			keys(configuration, "routes", "groups", "routeOperators", "interchanges");
+			final Map<String, Operator> routeOperators = new LinkedHashMap<>();
+			if (configuration.has("routeOperators")) {
+				for (Map.Entry<String, JsonElement> entry : object(configuration.get("routeOperators"), "routeOperators").entrySet()) {
+					final String routeId = unsignedId(entry.getKey(), "route id");
+					requireRoute(available, routeId, worldId);
+					routeOperators.put(routeId, requireOperator(operators, entry.getValue(), "routeOperators." + routeId));
+				}
+			}
 			final Map<String, DisplayRoute> routes = new LinkedHashMap<>();
 			for (String routeId : ids(configuration, "routes", false)) {
 				final JsonObject source = requireRoute(available, routeId, worldId);
-				put(routes, routeId, new DisplayRoute(routeId, source.get("name").getAsString(), source.get("color").getAsString(), false, Collections.emptyMap(), Collections.emptyMap()));
+				final Map<String, Operator> effectiveOperators = routeOperators.containsKey(routeId) ? Collections.singletonMap(routeId, routeOperators.get(routeId)) : Collections.emptyMap();
+				put(routes, routeId, new DisplayRoute(routeId, source.get("name").getAsString(), source.get("color").getAsString(), false, Collections.emptyMap(), Collections.emptyMap(), effectiveOperators));
 			}
 			final Set<String> groups = new HashSet<>();
 			for (JsonElement element : array(configuration, "groups", false)) {
 				final JsonObject group = object(element, "group");
-				keys(group, "id", "name", "color", "routeIds", "routeNames", "services");
+				keys(group, "id", "name", "color", "routeIds", "routeNames", "services", "operatorId");
+				final Operator groupOperator = group.has("operatorId") ? requireOperator(operators, group.get("operatorId"), "group.operatorId") : null;
 				final String id = string(group.get("id"), "group.id");
 				if (!id.matches("[a-z0-9][a-z0-9_-]{0,63}") || !groups.add(id)) {
 					throw invalid("invalid or duplicate group id: " + id);
@@ -118,13 +137,54 @@ final class BlueMapRoutePolicy {
 				if (!color.matches("#[0-9a-fA-F]{6}")) {
 					throw invalid("group color must be #rrggbb: " + id);
 				}
-				final DisplayRoute display = new DisplayRoute("group:" + id, name, color.toLowerCase(Locale.ROOT), true, routeNames, services);
+				final Map<String, Operator> effectiveOperators = new LinkedHashMap<>();
+				for (String member : members) {
+					final Operator operator = routeOperators.getOrDefault(member, groupOperator);
+					if (operator != null) {
+						effectiveOperators.put(member, operator);
+					}
+				}
+				final DisplayRoute display = new DisplayRoute("group:" + id, name, color.toLowerCase(Locale.ROOT), true, routeNames, services, effectiveOperators);
 				for (String member : members) {
 					requireRoute(available, member, worldId);
 					put(routes, member, display);
 				}
 			}
-			worlds.put(worldId, new WorldSelection(routes));
+			for (String routeId : routeOperators.keySet()) {
+				if (!routes.containsKey(routeId)) {
+					throw invalid("routeOperators key must be a selected route: " + routeId);
+				}
+			}
+			final Set<String> availableStations = new HashSet<>();
+			for (JsonElement element : array(catalog, "stations", false)) {
+				availableStations.add(element.getAsJsonObject().get("id").getAsString());
+			}
+			final List<Interchange> interchanges = new ArrayList<>();
+			final Set<String> interchangeIds = new HashSet<>();
+			final Set<String> assignedStations = new HashSet<>();
+			for (JsonElement element : array(configuration, "interchanges", false)) {
+				final JsonObject interchange = object(element, "interchange");
+				keys(interchange, "id", "name", "stationIds");
+				final String id = slug(string(interchange.get("id"), "interchange.id"), "interchange id");
+				if (!interchangeIds.add(id)) {
+					throw invalid("duplicate interchange id: " + id);
+				}
+				final String name = name(interchange.get("name"), "interchange.name");
+				final List<String> stationIds = ids(interchange, "stationIds", true);
+				if (stationIds.size() < 2) {
+					throw invalid("interchange must have at least two distinct stationIds: " + id);
+				}
+				for (String stationId : stationIds) {
+					if (!availableStations.contains(stationId)) {
+						throw invalid("unknown station " + stationId + " in " + worldId);
+					}
+					if (!assignedStations.add(stationId)) {
+						throw invalid("station occurs more than once in interchanges: " + stationId);
+					}
+				}
+				interchanges.add(new Interchange(id, name, stationIds));
+			}
+			worlds.put(worldId, new WorldSelection(routes, interchanges));
 		}
 		return new BlueMapRoutePolicy(worlds);
 	}
@@ -142,8 +202,24 @@ final class BlueMapRoutePolicy {
 				values.add(service.id);
 				values.add(service.name);
 				values.add(service.showName);
+				final Operator operator = display.operator(Long.parseUnsignedLong(sourceId));
+				if (operator != null) {
+					values.add(operator.id);
+					values.add(operator.name);
+				}
 				routes.add(sourceId, values);
 			});
+			if (!selection.interchanges.isEmpty()) {
+				final JsonArray interchanges = new JsonArray();
+				for (Interchange interchange : selection.interchanges) {
+					final JsonArray values = new JsonArray();
+					values.add(interchange.id);
+					values.add(interchange.name);
+					interchange.stationIds.forEach(values::add);
+					interchanges.add(values);
+				}
+				routes.add("interchanges", interchanges);
+			}
 			result.add(worldId, routes);
 		});
 		return result.toString();
@@ -166,17 +242,44 @@ final class BlueMapRoutePolicy {
 	private static List<String> ids(JsonObject object, String key, boolean required) {
 		final List<String> result = new ArrayList<>();
 		for (JsonElement value : array(object, key, required)) {
-			final String id = string(value, key);
-			try {
-				if (!id.matches("[1-9][0-9]{0,19}") || !Long.toUnsignedString(Long.parseUnsignedLong(id)).equals(id)) {
-					throw invalid("route id must be a nonzero unsigned decimal string: " + id);
-				}
-			} catch (NumberFormatException e) {
-				throw invalid("route id is outside unsigned 64-bit range: " + id);
-			}
-			result.add(id);
+			result.add(unsignedId(string(value, key), key));
 		}
 		return result;
+	}
+
+	private static String unsignedId(String id, String label) {
+		try {
+			if (!id.matches("[1-9][0-9]{0,19}") || !Long.toUnsignedString(Long.parseUnsignedLong(id)).equals(id)) {
+				throw invalid(label + " must be a nonzero unsigned decimal string: " + id);
+			}
+		} catch (NumberFormatException e) {
+			throw invalid(label + " is outside unsigned 64-bit range: " + id);
+		}
+		return id;
+	}
+
+	private static String slug(String id, String label) {
+		if (!id.matches("[a-z0-9][a-z0-9_-]{0,63}")) {
+			throw invalid("invalid " + label + ": " + id);
+		}
+		return id;
+	}
+
+	private static String name(JsonElement value, String label) {
+		final String name = string(value, label);
+		if (name.trim().isEmpty() || name.length() > 256) {
+			throw invalid(label + " must contain 1-256 characters");
+		}
+		return name;
+	}
+
+	private static Operator requireOperator(Map<String, Operator> operators, JsonElement value, String label) {
+		final String id = slug(string(value, label), label);
+		final Operator operator = operators.get(id);
+		if (operator == null) {
+			throw invalid("unknown operator: " + id);
+		}
+		return operator;
 	}
 
 	private static JsonArray array(JsonObject object, String key, boolean required) {
@@ -270,12 +373,14 @@ final class BlueMapRoutePolicy {
 	}
 
 	static final class WorldSelection {
-		static final WorldSelection EMPTY = new WorldSelection(Collections.emptyMap());
+		static final WorldSelection EMPTY = new WorldSelection(Collections.emptyMap(), Collections.emptyList());
 		private final Map<String, DisplayRoute> routes;
 		private final Long2ObjectOpenHashMap<DisplayRoute> routesById;
+		private final List<Interchange> interchanges;
 
-		private WorldSelection(Map<String, DisplayRoute> routes) {
+		private WorldSelection(Map<String, DisplayRoute> routes, List<Interchange> interchanges) {
 			this.routes = Collections.unmodifiableMap(new LinkedHashMap<>(routes));
+			this.interchanges = Collections.unmodifiableList(new ArrayList<>(interchanges));
 			// Build once per immutable policy revision; hot snapshot lookups allocate no ID strings.
 			routesById = new Long2ObjectOpenHashMap<>(routes.size());
 			this.routes.forEach((id, display) -> routesById.put(Long.parseUnsignedLong(id), display));
@@ -283,6 +388,10 @@ final class BlueMapRoutePolicy {
 
 		DisplayRoute route(long id) {
 			return routesById.get(id);
+		}
+
+		List<Interchange> interchanges() {
+			return interchanges;
 		}
 	}
 
@@ -293,14 +402,20 @@ final class BlueMapRoutePolicy {
 		final boolean grouped;
 		private final Map<String, String> routeNames;
 		private final Map<String, Service> services;
+		private final Map<String, Operator> operators;
 
-		private DisplayRoute(String id, String name, String color, boolean grouped, Map<String, String> routeNames, Map<String, Service> services) {
+		private DisplayRoute(String id, String name, String color, boolean grouped, Map<String, String> routeNames, Map<String, Service> services, Map<String, Operator> operators) {
 			this.id = id;
 			this.name = name;
 			this.color = color;
 			this.grouped = grouped;
 			this.routeNames = Collections.unmodifiableMap(new LinkedHashMap<>(routeNames));
 			this.services = Collections.unmodifiableMap(new LinkedHashMap<>(services));
+			this.operators = Collections.unmodifiableMap(new LinkedHashMap<>(operators));
+		}
+
+		Operator operator(long sourceId) {
+			return operators.get(Long.toUnsignedString(sourceId));
 		}
 
 		String serviceName(long sourceId, String fallback) {
@@ -311,6 +426,28 @@ final class BlueMapRoutePolicy {
 			final String key = Long.toUnsignedString(sourceId);
 			final Service service = services.get(key);
 			return service == null ? new Service(key, routeNames.getOrDefault(key, fallback), true) : service;
+		}
+	}
+
+	static final class Operator {
+		final String id;
+		final String name;
+
+		private Operator(String id, String name) {
+			this.id = id;
+			this.name = name;
+		}
+	}
+
+	static final class Interchange {
+		final String id;
+		final String name;
+		final List<String> stationIds;
+
+		private Interchange(String id, String name, List<String> stationIds) {
+			this.id = id;
+			this.name = name;
+			this.stationIds = Collections.unmodifiableList(new ArrayList<>(stationIds));
 		}
 	}
 
