@@ -11,6 +11,7 @@ import org.mtr.libraries.com.google.gson.JsonArray;
 import org.mtr.libraries.com.google.gson.JsonObject;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectArrayList;
 import org.mtr.libraries.it.unimi.dsi.fastutil.objects.ObjectObjectImmutablePair;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2IntOpenHashMap;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongAVLTreeSet;
 import org.mtr.libraries.it.unimi.dsi.fastutil.longs.LongImmutableList;
 
@@ -225,24 +226,33 @@ final class BlueMapSnapshot {
 		// Core limits each siding/platform before we can filter private services. Oversample
 		// with a finite cap so a few private departures cannot starve the public board.
 		final ArrivalsResponse response = new ArrivalsRequest(new LongImmutableList(ids), 128, -1).getArrivals(simulator);
-		return arrivalData(filterArrivals(response.getArrivals(), platforms, selection, response.getCurrentTime(), timestamp), timestamp);
+		// The pinned Core already sorts by arrival time (then its own tie breakers).
+		return arrivalData(filterSortedArrivals(response.getArrivals(), platforms, selection, response.getCurrentTime(), timestamp), timestamp);
 	}
 
 	static JsonArray filterArrivals(Iterable<ArrivalResponse> arrivals, Map<Long, Platform> platforms, BlueMapRoutePolicy.WorldSelection selection, long coreTime, long wallTime) {
 		final List<ArrivalResponse> sorted = new ArrayList<>();
 		arrivals.forEach(sorted::add);
 		sorted.sort(java.util.Comparator.comparingLong(ArrivalResponse::getArrival));
+		return filterSortedArrivals(sorted, platforms, selection, coreTime, wallTime);
+	}
+
+	/** Preserve the Core's order, including tied arrivals, without copying its whole response. */
+	static JsonArray filterSortedArrivals(Iterable<ArrivalResponse> arrivals, Map<Long, Platform> platforms, BlueMapRoutePolicy.WorldSelection selection, long coreTime, long wallTime) {
 		final JsonArray result = new JsonArray();
-		final Map<Long, Integer> stationCounts = new LinkedHashMap<>();
-		for (ArrivalResponse arrival : sorted) {
-			final BlueMapRoutePolicy.DisplayRoute display = selection.route(arrival.getRouteId());
+		final Long2IntOpenHashMap stationCounts = new Long2IntOpenHashMap();
+		for (ArrivalResponse arrival : arrivals) {
 			final Platform platform = platforms.get(arrival.getPlatformId());
-			if (display == null || platform == null || platform.area == null || arrival.getDeparture() < coreTime) {
+			if (platform == null || platform.area == null || arrival.getDeparture() < coreTime) {
 				continue;
 			}
 			final long stationId = platform.area.getId();
-			final int count = stationCounts.getOrDefault(stationId, 0);
+			final int count = stationCounts.get(stationId);
 			if (count >= 8) {
+				continue;
+			}
+			final BlueMapRoutePolicy.DisplayRoute display = selection.route(arrival.getRouteId());
+			if (display == null) {
 				continue;
 			}
 			stationCounts.put(stationId, count + 1);

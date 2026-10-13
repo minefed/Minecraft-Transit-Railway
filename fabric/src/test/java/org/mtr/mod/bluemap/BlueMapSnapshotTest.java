@@ -302,6 +302,43 @@ public final class BlueMapSnapshotTest {
 	}
 
 	@Test
+	public void sortedCoreArrivalsPreserveTiesAndCapEachStationAcrossPlatforms() {
+		final ClientData data = new ClientData();
+		final Station first = station(data, "First");
+		final Station second = station(data, "Second");
+		final Platform firstA = platform(data, first, new Position(0, 64, 0), new Position(20, 64, 0));
+		final Platform firstB = platform(data, first, new Position(40, 64, 0), new Position(60, 64, 0));
+		final Platform secondA = platform(data, second, new Position(80, 64, 0), new Position(100, 64, 0));
+		final Route selected = route(data, "Public", firstA, firstB, secondA);
+		final Route hidden = route(data, "Private", firstA);
+		final var policy = selection(data, List.of(selected), false);
+		final Map<Long, Platform> platforms = Map.of(firstA.getId(), firstA, firstB.getId(), firstB, secondA.getId(), secondA);
+		final List<ArrivalResponse> responses = new ArrayList<>();
+		responses.add(new ArrivalResponse("Expired", 8000, 9999, 0, true, 0, 0, selected, firstA));
+		responses.add(new ArrivalResponse("Private", 9000, 12000, 0, true, 0, 0, hidden, firstA));
+		for (int i = 0; i < 128; i++) {
+			// Equal arrival times exercise the Core comparator's tie order and stable publication.
+			responses.add(new ArrivalResponse("First " + i, 11000 + i / 2, 12000 + i, 0, i % 2 == 0, i, 0, selected, i % 2 == 0 ? firstA : firstB));
+			responses.add(new ArrivalResponse("Second " + i, 11000 + i / 2, 12000 + i, 0, i % 2 != 0, i, 0, selected, secondA));
+		}
+		java.util.Collections.shuffle(responses, new java.util.Random(141013));
+		java.util.Collections.sort(responses); // ArrivalsRequest.getArrivals uses this Core order.
+		final JsonArray result = BlueMapSnapshot.filterSortedArrivals(responses, platforms, policy, 10000, 1000000);
+		assertEquals(BlueMapSnapshot.filterArrivals(responses, platforms, policy, 10000, 1000000), result);
+		assertEquals(16, result.size());
+		final Map<String, Integer> counts = new java.util.HashMap<>();
+		for (var element : result) {
+			final JsonObject arrival = element.getAsJsonObject();
+			counts.merge(arrival.get("stationId").getAsString(), 1, Integer::sum);
+			assertFalse(arrival.get("destination").getAsString().equals("Expired"));
+			assertFalse(arrival.get("destination").getAsString().equals("Private"));
+			assertTrue(Integer.parseInt(arrival.get("destination").getAsString().split(" ")[1]) < 8);
+		}
+		assertEquals(Map.of(Long.toUnsignedString(first.getId()), 8, Long.toUnsignedString(second.getId()), 8), counts);
+		assertTrue(BlueMapSnapshot.filterSortedArrivals(responses, platforms, BlueMapRoutePolicy.CLOSED.world("unknown"), 10000, 1000000).isEmpty());
+	}
+
+	@Test
 	public void configuredServiceNamesReachRoutesStationsAndArrivalsWithoutRenamingThePrivateCatalog() {
 		final ClientData data = new ClientData();
 		final Station station = station(data, "Shared");
