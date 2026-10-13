@@ -3,6 +3,7 @@ package org.mtr.mod.bluemap;
 import org.mtr.libraries.com.google.gson.*;
 import org.mtr.libraries.com.google.gson.stream.JsonReader;
 import org.mtr.libraries.com.google.gson.stream.JsonToken;
+import org.mtr.libraries.it.unimi.dsi.fastutil.longs.Long2ObjectOpenHashMap;
 
 import java.io.IOException;
 import java.io.StringReader;
@@ -271,13 +272,17 @@ final class BlueMapRoutePolicy {
 	static final class WorldSelection {
 		static final WorldSelection EMPTY = new WorldSelection(Collections.emptyMap());
 		private final Map<String, DisplayRoute> routes;
+		private final Long2ObjectOpenHashMap<DisplayRoute> routesById;
 
 		private WorldSelection(Map<String, DisplayRoute> routes) {
 			this.routes = Collections.unmodifiableMap(new LinkedHashMap<>(routes));
+			// Build once per immutable policy revision; hot snapshot lookups allocate no ID strings.
+			routesById = new Long2ObjectOpenHashMap<>(routes.size());
+			this.routes.forEach((id, display) -> routesById.put(Long.parseUnsignedLong(id), display));
 		}
 
 		DisplayRoute route(long id) {
-			return routes.get(Long.toUnsignedString(id));
+			return routesById.get(id);
 		}
 	}
 

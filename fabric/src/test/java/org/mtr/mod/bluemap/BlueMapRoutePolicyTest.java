@@ -41,6 +41,25 @@ public final class BlueMapRoutePolicyTest {
 	}
 
 	@Test
+	public void reloadedSelectionsKeepIndependentUnsignedIndexesAndFingerprints() {
+		final BlueMapRoutePolicy before = policy("{\"routes\":[\"1\",\"" + MAX_UNSIGNED + "\"]}");
+		final String originalFingerprint = before.fingerprint();
+		final BlueMapRoutePolicy after = policy("{\"routes\":[\"2\"]}");
+		assertNotNull(before.world("world-a").route(1));
+		assertEquals(MAX_UNSIGNED, before.world("world-a").route(-1L).id);
+		assertNull(before.world("world-a").route(2));
+		assertNull(after.world("world-a").route(1));
+		assertNull(after.world("world-a").route(-1L));
+		assertEquals("2", after.world("world-a").route(2).id);
+		for (long missing : new long[]{0, 3, Long.MIN_VALUE, Long.MAX_VALUE}) {
+			assertNull(before.world("world-a").route(missing));
+			assertNull(after.world("world-a").route(missing));
+		}
+		assertEquals(originalFingerprint, before.fingerprint());
+		assertNotEquals(originalFingerprint, after.fingerprint());
+	}
+
+	@Test
 	public void groupsPublishOnlyTheirMembersWithOneDisplayIdentity() {
 		final BlueMapRoutePolicy policy = policy("{\"groups\":[{\"id\":\"metro\",\"name\":\"Metro line\",\"color\":\"#Ab12Cd\",\"routeIds\":[\"1\",\"2\"]}]}");
 		final BlueMapRoutePolicy.DisplayRoute first = policy.world("world-a").route(1);
