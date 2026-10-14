@@ -233,6 +233,34 @@ test('stale infrastructure clears the fleet and prevents an older in-flight live
     assert.equal(state.buffer.snapshots.length,0);assert.equal(state.publicationRevision,null);
 });
 
+test('a stale optional catalogue cannot clear a fresh map when another world has stopped', async () => {
+    let finishCatalog;
+    const state=overlayState({publicationRevision:'current',catalog:{schema:1,vehicles:{model:{name:'Previous name'}}},
+        cars:new Map([['current',{}]]),chunks:new Map([['current',{}]]),stationData:[{id:'current'}],
+        json:async()=>new Promise(resolve=>{finishCatalog=resolve})});
+    const pending=state.refreshCatalog(1,'catalog');
+    state.buffer.push(live(1000),1000);
+    finishCatalog({schema:1,stale:true,vehicles:{}});await pending;
+    assert.deepEqual(state.catalog,{schema:1,vehicles:{}});
+    assert.equal(state.publicationRevision,'current');assert.equal(state.buffer.snapshots.length,1);
+    assert.equal(state.cars.size,1);assert.equal(state.chunks.size,1);assert.deepEqual(state.stationData,[{id:'current'}]);
+});
+
+test('first-received ETA accounts for arrival cache age, source age and request travel time', async () => {
+    let now=1000;
+    const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,now:()=>now,refreshRails(){},
+        json:async()=>{now+=200;return {...live(100000),sourceAgeMs:1000,arrivalsTimestamp:95000,arrivals:[{stationId:'first'}]}}
+    });
+    await state.pollOnce();
+    assert.equal(state.buffer.isStale(now),false);
+    assert.equal(state.arrivalsFreshAt,-5000);
+    assert.ok(now-state.arrivalsFreshAt>STALE_MS);
+    state.json=async()=>({...live(100500),sourceAgeMs:1000,arrivalsTimestamp:99500,arrivals:[{stationId:'first'}]});
+    await state.pollOnce();
+    assert.equal(state.arrivalsFreshAt,now-2000);
+    assert.ok(now-state.arrivalsFreshAt<STALE_MS);
+});
+
 test('a late API vehicle response for the previous map cannot become visible', async () => {
     let finishVehicle;
     const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,
@@ -368,7 +396,7 @@ test('ETA freshness is independent from new vehicle timestamps and prediction er
     const state = {arrivalsTimestamp:-Infinity,arrivalsFreshAt:-Infinity,arrivals:[]};
     Overlay.prototype.acceptArrivals.call(state,{timestamp:1000,arrivalsTimestamp:800,arrivals:[{stationId:'a'}]},100);
     Overlay.prototype.acceptArrivals.call(state,{timestamp:8000,arrivalsTimestamp:800,arrivals:[{stationId:'a'}]},7100);
-    assert.equal(state.arrivalsFreshAt,100);
+    assert.equal(state.arrivalsFreshAt,-100);
     Overlay.prototype.acceptArrivals.call(state,{timestamp:8500,arrivalsTimestamp:0,arrivals:[]},7600);
     assert.equal(state.arrivalsFreshAt,-Infinity);
     assert.deepEqual(state.arrivals,[]);

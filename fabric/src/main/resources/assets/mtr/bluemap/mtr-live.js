@@ -670,7 +670,7 @@
             if (this.buffer.push(data, receivedAt)) {
                 // Network travel and source age use the same freshness budget as newly captured data.
                 this.buffer.lastFreshAt = receivedAt - age;
-                this.acceptArrivals(data, receivedAt);
+                this.acceptArrivals(data, receivedAt - age);
             }
             this.errors = 0;
             if (this.now() - this.lastRailsAt > 30000 && this.railRequestGeneration == null) this.refreshRails(generation, `${path}/infrastructure`);
@@ -683,8 +683,7 @@
             try {
                 const catalog = await this.json(path, true);
                 if (!this.disposed && generation === this.generation && sourceVersion === this.sourceVersion) {
-                    if (catalog.stale === true) this.clearTransit();
-                    else this.catalog = catalog;
+                    this.catalog = catalog.stale === true ? { schema: 1, vehicles: {} } : catalog;
                 }
             } catch (error) {
                 // Names are optional: catalog failures never stop neutral/route-colored vehicles.
@@ -773,7 +772,8 @@
             if (data.arrivalsTimestamp === 0) { this.arrivals = []; this.arrivalsFreshAt = -Infinity; return; }
             const timestamp = finite(data.arrivalsTimestamp) ? data.arrivalsTimestamp : data.timestamp;
             if (!finite(timestamp) || timestamp <= this.arrivalsTimestamp) return;
-            this.arrivalsTimestamp = timestamp; this.arrivalsFreshAt = receivedAt;
+            const ageWithinSnapshot = Math.max(0, (finite(data.timestamp) ? data.timestamp : timestamp) - timestamp);
+            this.arrivalsTimestamp = timestamp; this.arrivalsFreshAt = receivedAt - ageWithinSnapshot;
             this.arrivals = Array.isArray(data.arrivals) ? data.arrivals : [];
         }
 
