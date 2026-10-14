@@ -263,12 +263,43 @@
     }
 
     function safeUrl(path, base) {
-        if (typeof path !== "string" || !/^mtr-live\/[a-zA-Z0-9_-]+\.json$/.test(path)) throw new Error("Invalid MTR data URL");
+        if (path !== "mtr-live/index.json") throw new Error("Invalid MTR bootstrap URL");
         const url = new URL(path, base), root = new URL("mtr-live/", base);
         if (url.origin !== root.origin || !url.pathname.startsWith(root.pathname) || url.username || url.password) {
             throw new Error("MTR data URL must stay inside this map's mtr-live directory");
         }
         return url.href;
+    }
+
+    const WORLD_ID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+    function safeApiBase(value) {
+        if (typeof value !== "string" || !/^https?:\/\//.test(value) || /[\u0000-\u0020\u007f\\%?#@]/.test(value)) throw new Error("Invalid MTR API base");
+        const url = new URL(value);
+        const loopback = ["localhost", "127.0.0.1", "[::1]"].includes(url.hostname);
+        if ((url.protocol !== "https:" && !(url.protocol === "http:" && loopback)) || url.username || url.password ||
+            !/^\/(?:[a-zA-Z0-9_-]+\/)*[a-zA-Z0-9_-]*$/.test(url.pathname) || /(?:^|\/)\.{1,2}(?:\/|$)/.test(value)) {
+            throw new Error("MTR API requires HTTPS or loopback HTTP and a fixed path");
+        }
+        return url.href.replace(/\/$/, "");
+    }
+
+    function safeApiUrl(path, base) {
+        if (typeof path !== "string" || !(path === "catalog" || /^worlds\/[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}\/(vehicles|infrastructure)$/.test(path))) {
+            throw new Error("Invalid MTR API resource");
+        }
+        return `${safeApiBase(base)}/${path}`;
+    }
+
+    function bootstrap(data) {
+        if (!data || data.schema !== 2 || !data.maps || typeof data.maps !== "object" || Array.isArray(data.maps)) throw new Error("Unsupported MTR bootstrap");
+        const apiBase = safeApiBase(data.apiBase);
+        for (const entry of Object.values(data.maps)) {
+            if (!entry || typeof entry.worldId !== "string" || !entry.worldId.trim() || typeof entry.id !== "string" || !WORLD_ID.test(entry.id)) {
+                throw new Error("Invalid MTR world mapping");
+            }
+        }
+        return { schema: 2, apiBase, maps: data.maps };
     }
 
     function routeChunks(data) {
@@ -535,6 +566,10 @@
             this.controllers.clear();
             this.mapId = this.viewer.map && this.viewer.map.data.id;
             this.entry = null;
+            this.index = null;
+            this.apiBase = null;
+            this.sourceVersion = (this.sourceVersion || 0) + 1;
+            this.catalog = { schema: 1, vehicles: {} };
             this.lastIndexAt = -Infinity;
             this.lastRailsAt = -Infinity;
             this.railRequestGeneration = null;
@@ -568,15 +603,16 @@
             this.setStatus("연결 중…");
         }
 
-        async json(path) {
+        async json(path, fromApi = false) {
             const controller = new AbortController();
             this.controllers.add(controller);
             const timeout = setTimeout(() => controller.abort(), 4500);
             try {
-                const response = await this.fetch(safeUrl(path, this.base), { cache: "no-store", credentials: "same-origin", signal: controller.signal });
+                const url = fromApi ? safeApiUrl(path, this.apiBase) : safeUrl(path, this.base);
+                const response = await this.fetch(url, { cache: "no-store", credentials: fromApi ? "omit" : "same-origin", redirect: "error", signal: controller.signal });
                 if (!response.ok) throw new Error(`MTR HTTP ${response.status}`);
                 const data = await response.json();
-                if (!data || data.schema !== 1) throw new Error("Unsupported MTR data schema");
+                if (!data || data.schema !== (fromApi ? 1 : 2)) throw new Error("Unsupported MTR data schema");
                 return data;
             } finally {
                 clearTimeout(timeout);
@@ -589,45 +625,83 @@
             if (!mapId) return;
             const current = () => !this.disposed && generation === this.generation;
             if (!this.index || this.now() - this.lastIndexAt > 30000) {
-                const index = await this.json("mtr-live/index.json");
+                let index;
+                try { index = bootstrap(await this.json("mtr-live/index.json")); }
+                catch (error) {
+                    if (current()) {
+                        this.index = null; this.entry = null; this.apiBase = null;
+                        this.sourceVersion = (this.sourceVersion || 0) + 1;
+                        this.catalog = { schema: 1, vehicles: {} };
+                        this.clearTransit();
+                        this.setStatus("실시간 연결을 기다리고 있습니다", "offline");
+                    }
+                    throw error;
+                }
                 if (!current()) return;
+                const entry = Object.prototype.hasOwnProperty.call(index.maps, mapId) ? index.maps[mapId] : null;
+                if (index.apiBase !== this.apiBase || (entry && entry.id) !== (this.entry && this.entry.id)) {
+                    this.sourceVersion = (this.sourceVersion || 0) + 1;
+                    this.clearTransit();
+                    this.catalog = { schema: 1, vehicles: {} };
+                }
                 this.index = index;
+                this.apiBase = index.apiBase;
                 this.lastIndexAt = this.now();
-                this.entry = index.maps && Object.prototype.hasOwnProperty.call(index.maps, mapId) ? index.maps[mapId] : null;
-                if (index.catalog && this.catalogRequestGeneration == null) this.refreshCatalog(generation, index.catalog);
+                this.entry = entry;
+                if (entry && this.catalogRequestGeneration == null) this.refreshCatalog(generation, "catalog");
             }
             if (!current()) return;
             if (!this.entry) {
                 this.setStatus("공개된 노선이 없습니다", "empty");
                 return;
             }
-            const data = await this.json(this.entry.vehicles);
-            if (!current()) return;
-            this.acceptPublicationRevision(typeof data.publicationRevision === "string" ? data.publicationRevision : null);
-            if (this.buffer.push(data, this.now())) this.acceptArrivals(data, this.now());
+            const path = `worlds/${this.entry.id}`;
+            const requestedAt = this.now(), staticVersion = this.staticVersion;
+            const data = await this.json(`${path}/vehicles`, true);
+            if (!current() || staticVersion !== this.staticVersion) return;
+            const receivedAt = this.now(), age = data.sourceAgeMs + Math.max(0, receivedAt - requestedAt);
+            if (data.stale === true || !finite(data.sourceAgeMs) || data.sourceAgeMs < 0 || age > STALE_MS ||
+                typeof data.publicationRevision !== "string" || !data.publicationRevision || !finite(data.timestamp)) {
+                this.clearTransit();
+                this.setStatus("실시간 연결을 기다리고 있습니다", "offline");
+                return;
+            }
+            this.acceptPublicationRevision(data.publicationRevision);
+            if (this.buffer.push(data, receivedAt)) {
+                // Network travel and source age use the same freshness budget as newly captured data.
+                this.buffer.lastFreshAt = receivedAt - age;
+                this.acceptArrivals(data, receivedAt);
+            }
             this.errors = 0;
-            if (this.now() - this.lastRailsAt > 30000 && this.railRequestGeneration == null) this.refreshRails(generation, this.entry.rails);
+            if (this.now() - this.lastRailsAt > 30000 && this.railRequestGeneration == null) this.refreshRails(generation, `${path}/infrastructure`);
         }
 
         async refreshCatalog(generation, path) {
-            this.catalogRequestGeneration = generation;
+            const sourceVersion = this.sourceVersion;
+            const request = { generation, sourceVersion };
+            this.catalogRequestGeneration = request;
             try {
-                const catalog = await this.json(path);
-                if (!this.disposed && generation === this.generation) this.catalog = catalog;
+                const catalog = await this.json(path, true);
+                if (!this.disposed && generation === this.generation && sourceVersion === this.sourceVersion) {
+                    if (catalog.stale === true) this.clearTransit();
+                    else this.catalog = catalog;
+                }
             } catch (error) {
                 // Names are optional: catalog failures never stop neutral/route-colored vehicles.
             } finally {
-                if (generation === this.generation) this.catalogRequestGeneration = null;
+                if (this.catalogRequestGeneration === request) this.catalogRequestGeneration = null;
             }
         }
 
         async refreshRails(generation, path) {
-            this.railRequestGeneration = generation;
             const version = this.staticVersion, revision = this.publicationRevision;
+            const request = { generation, version };
+            this.railRequestGeneration = request;
             const current = () => !this.disposed && generation === this.generation && version === this.staticVersion && revision === this.publicationRevision;
             try {
-                const rails = await this.json(path);
+                const rails = await this.json(path, true);
                 if (!current()) return;
+                if (rails.stale === true) { this.clearTransit(); return; }
                 if ((typeof rails.publicationRevision === "string" ? rails.publicationRevision : null) !== revision) return;
                 // The exporter changes its timestamp every refresh, even when the infrastructure is unchanged.
                 // Keep the existing GPU meshes and HTML markers instead of rebuilding the whole network.
@@ -662,15 +736,19 @@
             } catch (error) {
                 if (current()) this.lastRailsAt = this.now() - 25000;
             } finally {
-                if (current()) this.railRequestGeneration = null;
+                if (this.railRequestGeneration === request) this.railRequestGeneration = null;
             }
         }
 
         acceptPublicationRevision(revision) {
             if (revision === this.publicationRevision) return;
+            this.clearTransit();
             this.publicationRevision = revision;
+        }
+
+        clearTransit() {
+            this.publicationRevision = null;
             this.staticVersion = (this.staticVersion || 0) + 1;
-            this.railRequestGeneration = null;
             this.lastRailsAt = -Infinity;
             this.infrastructureReady = false;
             this.infrastructureSignature = null;
@@ -1072,7 +1150,7 @@
         }
     }
 
-    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, transferStations, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, STALE_MS, BUFFER_MS };
+    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, transferStations, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, safeApiBase, safeApiUrl, bootstrap, STALE_MS, BUFFER_MS };
     if (typeof module !== "undefined" && module.exports) module.exports = api;
     else {
         scope.MinefedMtrBlueMap = api;

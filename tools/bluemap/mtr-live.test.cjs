@@ -1,10 +1,24 @@
 /* Run with node --test tools/bluemap/mtr-live.test.cjs. No third-party dependencies. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SnapshotBuffer, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
+const { SnapshotBuffer, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, safeApiBase, safeApiUrl, bootstrap, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
 
 const vehicle = (x = 0, yaw = 0, id = 'custom:unlisted', extra = {}) => ({ id: 'fleet-1', routeName: '<img src=x onerror=alert(1)>', color: '#3F81DA', cars: [{ id, position: [x, 64, -20], yaw, pitch: 0, length: 24, width: 3.2 }], ...extra });
 const snapshot = (timestamp, vehicles = [vehicle()]) => ({ schema: 1, timestamp, vehicles });
+const worldId = 'bc1529d0-314b-3547-a7be-6dea7491573d';
+const apiBase = 'https://api.example.test/v1/transit/minefed';
+const manifest = () => ({schema:2,apiBase,maps:{map:{worldId:'minecraft/overworld',id:worldId}}});
+const live = (timestamp, vehicles) => ({...snapshot(timestamp,vehicles),publicationRevision:'current',sourceAgeMs:0,stale:false});
+function overlayState(extra = {}) {
+    return Object.assign(Object.create(Overlay.prototype), {
+        generation:1,mapId:'map',disposed:false,index:null,entry:null,sourceVersion:0,staticVersion:0,
+        base:'https://map.example.test/sub/',now:()=>1000,buffer:new SnapshotBuffer(),controllers:new Set(),
+        cars:new Map(),trainGroup:{clear(){}},loadedChunks:new Map(),chunks:new Map(),
+        loadedRouteChunks:new Map(),routeChunks:new Map(),stationData:[],stationCatalog:new Map(),
+        catalog:{schema:1,vehicles:{}},arrivals:[],lastIndexAt:-Infinity,lastRailsAt:-Infinity,
+        removeRailChunk(){},clearTrainDots(){},clearStations(){},updateRouteLegend(){},clearDetail(){this.selection=null},leave(){},setStatus(){}
+    },extra);
+}
 
 test('all valid models survive normalization and unknown models get route colors and real dimensions', () => {
     const data = normalizeSnapshot(snapshot(1, [vehicle(0, 0, 'known'), { ...vehicle(20, 0, 'custom:not-in-catalog'), id: 'fleet-2' }]));
@@ -79,8 +93,8 @@ test('route geometry follows provided paths and never joins separate or missing 
 
 test('data requests stay under the BlueMap webroot, rejecting traversal and external endpoints', () => {
     const base = 'https://map.example.test/sub/map/index.html';
-    assert.equal(safeUrl('mtr-live/world-a-vehicles.json', base), 'https://map.example.test/sub/map/mtr-live/world-a-vehicles.json');
-    for (const path of ['https://evil.test/mtr-live/a.json', '../secret.json', 'mtr-live/../secret.json', 'mtr-live/%2e%2e%2fsecret.json', 'mtr-live/a.json?redirect=1', 'mtr-live/a.json#fragment', '//evil.test/mtr-live/a.json']) {
+    assert.equal(safeUrl('mtr-live/index.json', base), 'https://map.example.test/sub/map/mtr-live/index.json');
+    for (const path of ['mtr-live/world-a-vehicles.json', 'mtr-live/catalog.json', 'https://evil.test/mtr-live/a.json', '../secret.json', 'mtr-live/../secret.json', 'mtr-live/%2e%2e%2fsecret.json', 'mtr-live/a.json?redirect=1', 'mtr-live/a.json#fragment', '//evil.test/mtr-live/a.json']) {
         assert.throws(() => safeUrl(path, base));
     }
 });
@@ -94,45 +108,170 @@ test('a late response for the old map is discarded on map change', async () => {
     const pending = Overlay.prototype.pollOnce.call(state);
     state.generation++;
     state.mapId = 'new';
-    resolveIndex({ schema: 1, maps: { old: { vehicles: 'mtr-live/old-vehicles.json' } } });
+    resolveIndex({ ...manifest(), maps: { old: { worldId:'minecraft/overworld',id:worldId } } });
     await pending;
     assert.equal(state.index, null);
     assert.equal(state.entry, undefined);
 });
 
 test('catalog failures do not prevent unknown vehicles from loading', async () => {
-    const state = {
+    const state = overlayState({
         generation: 1, mapId: 'map', disposed: false, index: null, now: () => 1000, lastRailsAt: 1000,
-        buffer: new SnapshotBuffer(),
-        refreshCatalog: Overlay.prototype.refreshCatalog,
-        acceptPublicationRevision(){}, acceptArrivals(){},
+        refreshRails(){},
         json: async path => {
-            if (path === 'mtr-live/index.json') return { schema: 1, maps: { map: { vehicles: 'mtr-live/world-vehicles.json' } }, catalog: 'mtr-live/catalog.json' };
-            if (path === 'mtr-live/catalog.json') throw new Error('Missing catalog');
-            return snapshot(3000, [vehicle(42)]);
+            if (path === 'mtr-live/index.json') return manifest();
+            if (path === 'catalog') throw new Error('Missing catalog');
+            return live(3000, [vehicle(42)]);
         }
-    };
+    });
     await Overlay.prototype.pollOnce.call(state);
     assert.equal(state.buffer.sample(1000).get('fleet-1:0').position[0], 42);
 });
 
 test('slow static data never blocks subsequent live vehicle requests', async () => {
     let requests = 0, finishRails;
-    const state = {
-        generation: 1, mapId: 'map', disposed: false, index: {}, entry: { vehicles: 'mtr-live/a-vehicles.json', rails: 'mtr-live/a-rails.json' },
+    const state = overlayState({
+        generation: 1, mapId: 'map', disposed: false, index: manifest(), entry: manifest().maps.map, apiBase,
         now: () => 1000, lastIndexAt: 1000, lastRailsAt: -Infinity, buffer: new SnapshotBuffer(),
         acceptPublicationRevision(){}, acceptArrivals(){},
         refreshRails(generation) {
             this.railRequestGeneration = generation;
             return new Promise(resolve => { finishRails = resolve; });
         },
-        json: async () => snapshot(++requests * 500)
-    };
+        json: async () => live(++requests * 500)
+    });
     await Overlay.prototype.pollOnce.call(state);
     await Overlay.prototype.pollOnce.call(state);
     assert.equal(requests, 2);
     assert.equal(state.buffer.snapshots.length, 2);
     finishRails();
+});
+
+test('API bases and derived resources reject credentials, insecure origins and path injection', () => {
+    for (const base of [apiBase, `${apiBase}/`, 'http://localhost:3100/v1/transit/minefed', 'http://127.0.0.1:3100/v1', 'http://[::1]:3100/v1']) {
+        assert.equal(safeApiUrl(`worlds/${worldId}/vehicles`, base), `${safeApiBase(base)}/worlds/${worldId}/vehicles`);
+    }
+    for (const base of ['http://api.example.test/v1', 'https://user:secret@api.example.test/v1', 'https://api.example.test/v1?key=secret',
+        'https://api.example.test/v1#fragment', '//api.example.test/v1', 'https:api.example.test/v1', 'https://api.example.test/a/../v1',
+        'https://api.example.test/%2e%2e/v1', 'https://api.example.test/a\\v1', 'https://api.example.test/v1\n', 'http://localhost.evil.test/v1']) {
+        assert.throws(() => safeApiBase(base), base);
+    }
+    for (const path of ['mtr-live/index.json','../catalog','catalog?token=x',`${apiBase}/catalog`,'//evil.test/catalog',
+        `worlds/${worldId}/vehicles/other`,`worlds/${worldId}/../vehicles`,`worlds/${worldId}/vehicles#x`,'worlds/%2e%2e/vehicles']) {
+        assert.throws(() => safeApiUrl(path, apiBase), path);
+    }
+    assert.throws(() => bootstrap({...manifest(),schema:1}));
+    assert.throws(() => bootstrap({...manifest(),maps:{map:{id:'../private',worldId:'minecraft/overworld'}}}));
+});
+
+test('schema two bootstrap derives credential-free API requests and never loads old local snapshots', async () => {
+    const requests=[];
+    const state=overlayState({fetch:async(url,options)=>{
+        requests.push({url,options});
+        const data=url.endsWith('/mtr-live/index.json')?manifest():url.endsWith('/catalog')?{schema:1,vehicles:{}}:
+            url.endsWith('/vehicles')?live(1000):{schema:1,publicationRevision:'current',rails:[],routes:[],stations:[]};
+        return {ok:true,json:async()=>data};
+    }});
+    await state.pollOnce();
+    await new Promise(resolve=>setImmediate(resolve));
+    assert.deepEqual(requests.map(request=>request.url),[
+        'https://map.example.test/sub/mtr-live/index.json',`${apiBase}/catalog`,`${apiBase}/worlds/${worldId}/vehicles`,`${apiBase}/worlds/${worldId}/infrastructure`
+    ]);
+    assert.equal(requests[0].options.credentials,'same-origin');
+    assert.ok(requests.slice(1).every(request=>request.options.credentials==='omit' && request.options.redirect==='error'));
+    assert.equal(state.buffer.snapshots.length,1);
+    assert.equal(state.infrastructureReady,true);
+});
+
+test('missing, malformed and old bootstrap documents clear existing transit without local fallback', async () => {
+    for (const result of [new Error('404'),{schema:1,maps:{}},{...manifest(),apiBase:'http://public.example.test/api'}]) {
+        const requests=[];
+        const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:-Infinity,
+            cars:new Map([['previous',{}]]),chunks:new Map([['previous',{}]]),stationData:[{id:'previous'}],
+            json:async path=>{requests.push(path);if(result instanceof Error)throw result;return result}
+        });
+        await assert.rejects(state.pollOnce());
+        assert.deepEqual(requests,['mtr-live/index.json']);
+        assert.equal(state.entry,null);assert.equal(state.cars.size,0);assert.equal(state.chunks.size,0);assert.deepEqual(state.stationData,[]);
+    }
+});
+
+test('expired or missing API source age clears every transit layer, even on a first successful fetch', async () => {
+    for (const extra of [{stale:true},{sourceAgeMs:6001},{sourceAgeMs:undefined},{sourceAgeMs:-1},{sourceAgeMs:'0'},{sourceAgeMs:NaN}]) {
+        const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,
+            cars:new Map([['old',{}]]),chunks:new Map([['old',{}]]),routeChunks:new Map([['old',{}]]),stationData:[{id:'old'}],
+            arrivals:[{stationId:'old'}],json:async()=>({...live(1000),...extra})
+        });
+        await state.pollOnce();
+        assert.equal(state.buffer.snapshots.length,0);assert.equal(state.cars.size,0);assert.equal(state.chunks.size,0);
+        assert.equal(state.routeChunks.size,0);assert.deepEqual(state.stationData,[]);assert.deepEqual(state.arrivals,[]);
+    }
+});
+
+test('source age and network delay reduce the remaining freshness budget without using the browser wall clock', async () => {
+    let now=1000;
+    const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,now:()=>now,refreshRails(){},
+        json:async()=>{now+=500;return {...live(1_700_000_000_000),sourceAgeMs:4000}}
+    });
+    await state.pollOnce();
+    assert.equal(state.buffer.isStale(now),false);
+    assert.equal(state.buffer.isStale(now+1501),true);
+    now+=1000;state.json=async()=>{now+=4500;return {...live(1_700_000_001_000),sourceAgeMs:2000}};
+    await state.pollOnce();
+    assert.equal(state.buffer.snapshots.length,0);
+});
+
+test('stale infrastructure clears the fleet and prevents an older in-flight live response from repopulating it', async () => {
+    let finishVehicle;
+    const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,publicationRevision:'current',
+        json:async path=>path.endsWith('/vehicles')?new Promise(resolve=>{finishVehicle=resolve}):{schema:1,publicationRevision:'current',stale:true,rails:[]}
+    });
+    state.buffer.push(live(500),500);
+    const pending=state.pollOnce();
+    await state.refreshRails(1,`worlds/${worldId}/infrastructure`);
+    finishVehicle(live(1000));await pending;
+    assert.equal(state.buffer.snapshots.length,0);assert.equal(state.publicationRevision,null);
+});
+
+test('a late API vehicle response for the previous map cannot become visible', async () => {
+    let finishVehicle;
+    const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,
+        json:async()=>new Promise(resolve=>{finishVehicle=resolve})});
+    const pending=state.pollOnce();
+    state.generation++;state.mapId='new';state.clearTransit();
+    finishVehicle(live(1000));await pending;
+    assert.equal(state.buffer.snapshots.length,0);
+});
+
+test('publication changes discard old infrastructure without overlapping static requests', async () => {
+    let finishOld,staticRequests=0,timestamp=1000;
+    const state=overlayState({index:manifest(),entry:manifest().maps.map,apiBase,lastIndexAt:1000,publicationRevision:'old',
+        json:async path=>{
+            if(path.endsWith('/vehicles'))return {...live(++timestamp),publicationRevision:'new'};
+            staticRequests++;
+            if(staticRequests===1)return new Promise(resolve=>{finishOld=resolve});
+            return {schema:1,publicationRevision:'new',rails:[],routes:[],stations:[]};
+        }
+    });
+    const pending=state.refreshRails(1,`worlds/${worldId}/infrastructure`);
+    await state.pollOnce();assert.equal(state.publicationRevision,'new');assert.equal(staticRequests,1);
+    await state.pollOnce();assert.equal(staticRequests,1);
+    finishOld({schema:1,publicationRevision:'old',rails:[],routes:[],stations:[{id:'old',position:[0,0,0]}]});
+    await pending;assert.deepEqual(state.stationData,[]);
+    await state.pollOnce();await new Promise(resolve=>setImmediate(resolve));
+    assert.equal(staticRequests,2);assert.equal(state.infrastructureReady,true);
+});
+
+test('poll waits for its request before scheduling the next cycle', async t => {
+    t.mock.timers.enable({apis:['setTimeout']});
+    let requests=0,finish;
+    const state={disposed:false,poll:Overlay.prototype.poll,pollOnce:()=>{requests++;return new Promise(resolve=>{finish=resolve})}};
+    const pending=state.poll();
+    t.mock.timers.tick(2000);assert.equal(requests,1);
+    finish();await pending;
+    t.mock.timers.tick(499);assert.equal(requests,1);
+    t.mock.timers.tick(1);assert.equal(requests,2);
+    state.disposed=true;finish();
 });
 
 test('grouped routes and station badges deduplicate IDs and never invent private catalog entries', () => {
@@ -238,7 +377,7 @@ test('ETA freshness is independent from new vehicle timestamps and prediction er
 test('publication change drops all visible objects, ETA, selection and blocks an old static response', async () => {
     let resolveOld;
     const state = {
-        generation:1,disposed:false,publicationRevision:'old',staticVersion:1,now:()=>0,
+        generation:1,disposed:false,publicationRevision:'old',staticVersion:1,now:()=>0,clearTransit:Overlay.prototype.clearTransit,
         json:()=>new Promise(resolve=>{resolveOld=resolve}),buffer:new SnapshotBuffer(),cars:new Map([['old',{}]]),
         trainGroup:{clear(){}},loadedChunks:new Map([['old',{}]]),chunks:new Map([['old',{}]]),
         loadedRouteChunks:new Map([['old',{}]]),routeChunks:new Map([['old',{}]]),stationData:[{id:'old'}],stationCatalog:new Map([['old',{id:'old',interchangeId:'interchange:old'}]]),
