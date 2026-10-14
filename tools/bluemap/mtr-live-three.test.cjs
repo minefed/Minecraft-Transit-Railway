@@ -85,3 +85,39 @@ test('distant train markers only rewrite changed labels and colors and still upd
     now=9000;overlay.render();assert.equal(overlay.trainDots.size,0);assert.equal(removals,1);
     overlay.dispose();
 });
+
+test('API outage expires every public mesh and station once, then recovers through the same API mapping', async () => {
+    let now=1000,clears=0;
+    const viewer={markers:new THREE.Scene(),map:{data:{id:'a'}},data:{mapState:'loaded',loadedHiresViewDistance:200},
+        controlsManager:{position:new THREE.Vector3(),distance:300},camera:new THREE.PerspectiveCamera(),
+        renderer:{domElement:{addEventListener(){},removeEventListener(){},getBoundingClientRect:()=>({width:1000,height:800})}},redraw(){}};
+    const overlay=new Overlay({mapViewer:viewer,events:new EventTarget()},THREE,{ui:false,poll:false,base:'https://map.example.test/',
+        fetch:async()=>{throw new Error('Network unavailable')},now:()=>now});
+    const id='bc1529d0-314b-3547-a7be-6dea7491573d', apiBase='https://api.example.test/v1/transit/minefed';
+    const entry={id,worldId:'minecraft/overworld'};
+    const index={schema:2,apiBase,maps:{a:entry}};
+    const infrastructure={schema:1,publicationRevision:'current',rails:[{points:[[0,0,0],[30,5,0]]}],
+        routes:[{id:'r',color:'#1244ff',paths:[[[0,0,0],[30,5,0]]]}],stations:[{id:'s',name:'Public station',position:[5,1,0],routes:['r']}]};
+    const snapshot=()=>({schema:1,timestamp:now,sourceAgeMs:0,stale:false,publicationRevision:'current',arrivalsTimestamp:now,arrivals:[],
+        vehicles:[{id:'t',cars:[{id:'car',position:[0,0,0],yaw:0,pitch:0}]}]});
+    Object.assign(overlay,{entry,index,apiBase,lastIndexAt:now,publicationRevision:'current',infrastructureReady:true});
+    overlay.buffer.push(snapshot(),now);
+    overlay.chunks=railChunks(infrastructure);overlay.routeChunks=routeChunks(infrastructure);
+    overlay.stationData=infrastructure.stations;overlay.stationCatalog=new Map(infrastructure.stations.map(station=>[station.id,station]));
+    overlay.render();
+    assert.equal(overlay.loadedChunks.size,1);assert.equal(overlay.loadedRouteChunks.size,1);assert.equal(overlay.stations.size,1);
+    const originalClear=overlay.clearTransit.bind(overlay);
+    overlay.clearTransit=()=>{clears++;originalClear()};
+    now+=6001;
+    await assert.rejects(overlay.pollOnce(),/Network unavailable/);
+    overlay.render();
+    assert.equal(clears,1);assert.equal(overlay.cars.size,0);assert.equal(overlay.loadedChunks.size,0);
+    assert.equal(overlay.loadedRouteChunks.size,0);assert.equal(overlay.stations.size,0);
+    assert.equal(overlay.railsGroup.children.length,0);assert.equal(overlay.routesGroup.children.length,0);assert.equal(overlay.stationsGroup.children.length,0);
+    assert.equal(overlay.entry,entry);assert.equal(overlay.index,index);assert.equal(overlay.apiBase,apiBase);
+    now+=50;overlay.render();now+=50;overlay.render();assert.equal(clears,1);
+    overlay.fetch=async url=>({ok:true,json:async()=>url.endsWith('/vehicles')?snapshot():infrastructure});
+    await overlay.pollOnce();await new Promise(resolve=>setImmediate(resolve));overlay.render();
+    assert.equal(overlay.cars.size,1);assert.equal(overlay.loadedChunks.size,1);assert.equal(overlay.stations.size,1);
+    overlay.dispose();
+});

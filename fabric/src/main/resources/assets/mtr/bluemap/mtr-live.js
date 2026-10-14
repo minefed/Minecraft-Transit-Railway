@@ -751,6 +751,7 @@
             this.lastRailsAt = -Infinity;
             this.infrastructureReady = false;
             this.infrastructureSignature = null;
+            this.missingLegs = 0;
             this.buffer.clear();
             this.arrivals = [];
             this.arrivalsTimestamp = -Infinity; this.arrivalsFreshAt = -Infinity;
@@ -792,6 +793,11 @@
                 return;
             }
             const now = this.now(), stale = this.buffer.isStale(now);
+            if (stale && (this.publicationRevision != null || this.infrastructureReady || this.buffer.snapshots.length ||
+                this.cars.size || this.chunks.size || this.routeChunks.size || this.stationData.length || this.arrivals.length)) {
+                // A timeout cannot deliver stale:true; expire the last publication locally as well.
+                this.clearTransit();
+            }
             this.group.visible = Boolean(this.entry);
             this.trainGroup.visible = this.showTrains && !stale;
             this.railsGroup.visible = this.showRails;
