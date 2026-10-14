@@ -1,7 +1,7 @@
 /* Run with node --test tools/bluemap/mtr-live.test.cjs. No third-party dependencies. */
 const { test } = require('node:test');
 const assert = require('node:assert/strict');
-const { SnapshotBuffer, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, safeApiBase, safeApiUrl, bootstrap, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
+const { SnapshotBuffer, normalizeSnapshot, catalogEntry, trainLabel, modelName, publicRoutes, stationRoutes, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, safeUrl, safeApiBase, safeApiUrl, bootstrap, Overlay, STALE_MS, BUFFER_MS } = require('../../fabric/src/main/resources/assets/mtr/bluemap/mtr-live.js');
 
 const vehicle = (x = 0, yaw = 0, id = 'custom:unlisted', extra = {}) => ({ id: 'fleet-1', routeName: '<img src=x onerror=alert(1)>', color: '#3F81DA', cars: [{ id, position: [x, 64, -20], yaw, pitch: 0, length: 24, width: 3.2 }], ...extra });
 const snapshot = (timestamp, vehicles = [vehicle()]) => ({ schema: 1, timestamp, vehicles });
@@ -617,7 +617,8 @@ test('hidden service names disappear from legend, station and train cards withou
     const car=normalizeSnapshot(snapshot(1,[vehicle(0,0,'known',{routeId:'group:central',routeName:'중앙선',serviceId:'service:central:express',serviceName:'숨긴 급행',showServiceName:false})])).cars.get('fleet-1:0');
     overlay.showTrainDetail(car);
     assert.ok(overlay.detail.textContent.includes('중앙선'));
-    assert.ok(overlay.detail.textContent.includes('known'));
+    assert.ok(!overlay.detail.textContent.includes('known')); // uncatalogued model IDs stay internal
+    assert.ok(overlay.detail.textContent.includes('1량 편성'));
     assert.ok(!overlay.detail.textContent.includes('숨긴 급행'));
     overlay.showTrainDetail({...car,serviceName:'호환 완행',showServiceName:undefined});
     assert.ok(overlay.detail.textContent.includes('호환 완행'));
@@ -760,3 +761,13 @@ test('map UI mode shows stations, routes and trains in the BlueMap place panel',
     train.actions[0].onClick();
     assert.deepEqual(ui.flown,{x:5,y:64,z:6});
 }));
+
+test('train labels name the line and service without internal vehicle or model IDs', () => {
+    const car = { id: 'sp1900_cab_1', vehicleId: '8658071617266451595', index: 2, routeName: '해안선', serviceName: '급행', showServiceName: true, carCount: 6 };
+    assert.equal(trainLabel(car), '해안선 · 급행 · 6량 편성');
+    assert.equal(trainLabel({ ...car, showServiceName: false }), '해안선 · 6량 편성');
+    assert.equal(trainLabel({ ...car, serviceName: '해안선' }), '해안선 · 6량 편성');
+    assert.equal(trainLabel({ id: 'x', routeName: '', carCount: 0 }), '운행 열차');
+    assert.equal(modelName({ vehicles: {} }, car), '');
+    assert.equal(modelName({ vehicles: { sp1900_cab_1: { name: 'SP1900 Cab' } } }, car), 'SP1900 Cab');
+});

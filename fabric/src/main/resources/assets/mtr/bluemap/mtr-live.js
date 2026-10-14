@@ -107,6 +107,18 @@
         };
     }
 
+    // Riders know a train by its line and service, not by the internal vehicle ID or car model ID.
+    function trainLabel(car) {
+        const service = car.showServiceName !== false && car.serviceName && car.serviceName !== car.routeName ? car.serviceName : "";
+        return [car.routeName || "운행 열차", service, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · ");
+    }
+
+    // Catalog display name, or nothing when only the raw model ID is known.
+    function modelName(catalog, car) {
+        const name = catalogEntry(catalog, car).name;
+        return name && name !== car.id ? name : "";
+    }
+
     function publicRoutes(routes) {
         const result = new Map();
         for (const route of Array.isArray(routes) ? routes : []) {
@@ -428,7 +440,7 @@
             box(0, height + 0.30, 0, width * 0.93, 0.14, length * 0.95, "#d2d6db");
             box(0, 0.24, 0, width * 0.78, 0.32, length * 0.82, "#30343a");
             group.rotation.order = "YXZ";
-            group.userData.mtrLabel = `${car.routeName ? `${car.routeName} · ` : ""}${entry.name} · ${car.vehicleId} · ${car.index + 1}`;
+            group.userData.mtrLabel = trainLabel(car);
             group.userData.car = car;
             group.userData.signature = `${car.id}:${entry.length}:${entry.width}:${entry.color}:${car.routeName}`;
             this.trainGroup.add(group);
@@ -845,7 +857,7 @@
                 if (dot) {
                     dot.position.fromArray(car.position);
                     dot.position.y += 3.5;
-                    const label = `${car.routeName ? `${car.routeName} · ` : ""}${catalogEntry(this.catalog, car).name} · ${car.vehicleId}`;
+                    const label = trainLabel(car);
                     if (dot.userData.mtrLabel !== label) {
                         dot.userData.mtrLabel = label;
                         dot.userData.button.title = label;
@@ -1060,7 +1072,7 @@
         showTrainDetail(car) {
             if (this.ui) return this.showTrainPlace(car);
             const route = this.routeCatalog.get(car.routeId);
-            const model = catalogEntry(this.catalog, car).name;
+            const model = modelName(this.catalog, car);
             const operators = uniqueOperators([{ id: car.operatorId, name: car.operatorName }]);
             this.showDetail({ title: car.routeName || "운행 열차", kind: "실시간 열차", description: [car.showServiceName === false ? "" : car.serviceName, model, car.carCount ? `${car.carCount}량 편성` : ""].filter(Boolean).join(" · "), routes: route ? [{ ...route, operators }] : [], symbol: "train" });
         }
@@ -1322,7 +1334,7 @@
         }
 
         showTrainPlace(car) {
-            const route = this.routeCatalog.get(car.routeId), model = catalogEntry(this.catalog, car).name;
+            const route = this.routeCatalog.get(car.routeId), model = modelName(this.catalog, car);
             const current = () => this.latestCar(car.vehicleId) || car;
             const position = () => { const pose = current(); return { x: pose.position[0], y: pose.position[1], z: pose.position[2] }; };
             this.ui.openPlace({
@@ -1460,7 +1472,7 @@
         }
     }
 
-    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, publicRoutes, stationRoutes, transferStations, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, safeApiBase, safeApiUrl, bootstrap, STALE_MS, BUFFER_MS };
+    const api = { SnapshotBuffer, Overlay, normalizeSnapshot, catalogEntry, trainLabel, modelName, publicRoutes, stationRoutes, transferStations, stationConnections, uniqueOperators, uniqueServices, upcomingArrivals, railChunks, routeChunks, angleBetween, safeUrl, safeApiBase, safeApiUrl, bootstrap, STALE_MS, BUFFER_MS };
     if (typeof module !== "undefined" && module.exports) module.exports = api;
     else {
         scope.MinefedMtrBlueMap = api;
