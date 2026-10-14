@@ -689,3 +689,74 @@ test('selected station ETA updates independently and clears its old forecast on 
         overlay.clearDetail();assert.equal(overlay.detail.hidden,true);assert.equal(overlay.selectedStation,null);assert.equal(overlay.detail.children.length,0);
     } finally {global.document=previous;}
 });
+
+test('map UI mode shows stations, routes and trains in the BlueMap place panel', () => withDocument(() => {
+    const opened=[], layers=[], chips=[], search=new Map(), resolvers=new Map();
+    let closed=0;
+    const ui={state:{selectedKey:null},
+        registerLayer(layer){layers.push(layer);return ()=>{}},registerChip(chip){chips.push(chip);return ()=>{}},
+        registerSearchProvider(id,provider){search.set(id,provider);return ()=>{}},registerResolver(prefix,resolver){resolvers.set(prefix,resolver);return ()=>{}},
+        openPlace(place){opened.push(place);ui.state.selectedKey=place.key},openList(list){ui.list=list},closePanel(){closed++;ui.state.selectedKey=null},
+        setStatus(){},refresh(){},flyTo(position){ui.flown=position},formatBlocks:n=>`${Math.round(n)}블록`,formatCoordinates:p=>`${p.x},${p.z}`,positionRows:()=>[],addressAt:()=>null};
+    const routes=[{id:'group:a',name:'중앙선',color:'#317fce',stations:['a','b'],services:[{id:'s',name:'급행'}],operators:[{id:'o',name:'중앙철도'}]},{id:'group:b',name:'해안선',color:'#3ba879',stations:['a']}];
+    const a={id:'a',name:'중앙역',position:[0,64,0],routes:['group:a','group:b'],services:[{id:'s',name:'급행',routeId:'group:a',operators:[{id:'o',name:'중앙철도'}]}]}, b={id:'b',name:'강변역',position:[100,64,0],routes:['group:a']};
+    const overlay=Object.assign(Object.create(Overlay.prototype),{
+        viewer:{rootElement:new ElementDouble('main'),renderer:{domElement:new ElementDouble('canvas')},controlsManager:{position:{x:0,z:0},distance:500},redraw(){}},
+        showTrains:true,showRoutes:true,showStations:true,showRails:true,uiDisposers:[],lastPoses:new Map(),
+        routeCatalog:publicRoutes(routes),stationData:[a,b],stationCatalog:new Map([['a',a],['b',b]]),catalog:{schema:1,vehicles:{}},
+        now:()=>1000,buffer:{offset:-99000,isStale:()=>false},arrivalsFreshAt:1000,
+        arrivals:[{stationId:'a',routeId:'group:a',arrivalTime:220000,destination:'강변역',vehicleId:'t'}]
+    });
+    const find=(element,className)=>element.className===className?element:element.children.map(child=>find(child,className)).find(Boolean);
+    assert.equal(overlay.attachMapUi(ui),true);
+    assert.equal(layers.map(layer=>layer.id).join(),'mtr-showTrains,mtr-showRoutes,mtr-showStations,mtr-showRails');
+    layers[3].set(false);
+    assert.equal(overlay.showRails,false);
+    assert.equal(chips.map(chip=>chip.id).join(),'mtr-stations,mtr-routes');
+    assert.equal(chips[0].visible(),true);
+    assert.equal(overlay.uiDisposers.length,9);
+    const results=search.get('mtr')('해안');
+    assert.ok(results.some(result=>result.title==='중앙역'));
+    assert.ok(results.some(result=>result.title==='해안선'));
+
+    overlay.showStationDetail(a);
+    const station=opened.pop();
+    assert.equal(station.key,'mtr-station:a');
+    assert.equal(station.kind,'환승역');
+    assert.equal(station.badges.map(badge=>badge.label).join(),'중앙선,해안선');
+    assert.ok(!overlay.selectedStation,'state activates only when the panel mounts the content');
+    const mount=new ElementDouble('div'), cleanup=station.mount(mount);
+    assert.equal(overlay.selectedStation,a);
+    for (const text of ['곧 도착하는 열차','강변역 방면','2분','운행 노선','중앙철도','급행']) assert.ok(mount.textContent.includes(text),text);
+
+    find(mount,'mtr-place-route').listeners.get('click')();
+    const route=opened.pop();
+    assert.equal(route.key,'mtr-route:group:a');
+    assert.equal(overlay.selectedStation,a,'opening another place leaves cleanup to the unmounted view');
+    const diagram=new ElementDouble('div');
+    route.mount(diagram);
+    assert.ok(diagram.textContent.includes('중앙역해안선'));
+    assert.ok(diagram.textContent.includes('강변역'));
+    cleanup();
+    assert.equal(overlay.selectedStation,null);
+    station.mount(new ElementDouble('div'));
+    assert.equal(overlay.selectedStation,a,'navigating back re-activates live arrivals');
+
+    ui.state.selectedKey='mtr-station:a';
+    overlay.clearDetail();
+    assert.equal(closed,1);
+    assert.equal(resolvers.get('mtr-station')('mtr-station:b'),true);
+    assert.equal(opened.pop().title,'강변역');
+    assert.equal(resolvers.get('mtr-station')('mtr-station:missing'),false);
+    assert.equal(resolvers.get('mtr-route')('mtr-route:group:b'),true);
+
+    overlay.lastPoses=new Map([['t:0',{vehicleId:'t',index:0,position:[5,64,6],routeId:'group:a',routeName:'중앙선',operatorName:'중앙철도',color:'#317fce'}]]);
+    overlay.showTrainDetail({vehicleId:'t',index:0,position:[1,64,1],routeId:'group:a',routeName:'중앙선',serviceName:'급행',carCount:4,color:'#317fce',id:'model'});
+    const train=opened.pop();
+    assert.equal(train.key,'mtr-train:t');
+    assert.equal(train.defaultActions,false);
+    assert.deepEqual(train.position(),{x:5,y:64,z:6});
+    assert.ok(train.rows().some(row=>row.text==='중앙철도'));
+    train.actions[0].onClick();
+    assert.deepEqual(ui.flown,{x:5,y:64,z:6});
+}));
