@@ -230,7 +230,9 @@ public final class BlueMapSnapshotTest {
 		express.depots.add(depot);
 		path.forEach(segment -> data.rails.add(segment.getRail()));
 		data.rails.add(rail(new Position(500, 5, 0), Angle.E, new Position(600, 5, 0), Angle.W, true));
-		final JsonObject output = BlueMapSnapshot.infrastructure(data, 100, selection(data, List.of(local, express), true));
+		final RailGeometryCache geometryCache = new RailGeometryCache();
+		final JsonObject output = BlueMapSnapshot.infrastructure(data, 100, selection(data, List.of(local, express), true), geometryCache);
+		assertEquals(output.toString(), BlueMapSnapshot.infrastructure(data, 100, selection(data, List.of(local, express), true), geometryCache).toString());
 		assertEquals(3, output.getAsJsonArray("rails").size());
 		assertEquals(1, output.getAsJsonArray("routes").size());
 		final JsonObject group = output.getAsJsonArray("routes").get(0).getAsJsonObject();
@@ -254,11 +256,16 @@ public final class BlueMapSnapshotTest {
 		final JsonObject privateCatalog = BlueMapSnapshot.routeCatalog(data, "minecraft/overworld");
 		assertEquals(3, privateCatalog.getAsJsonArray("routes").size());
 		assertTrue(privateCatalog.toString().contains("\"hidden\":true"));
-		final JsonObject closed = BlueMapSnapshot.infrastructure(data, 101, BlueMapRoutePolicy.WorldSelection.EMPTY);
+		final JsonObject closed = BlueMapSnapshot.infrastructure(data, 101, BlueMapRoutePolicy.WorldSelection.EMPTY, geometryCache);
 		assertTrue(closed.getAsJsonArray("rails").isEmpty());
 		assertTrue(closed.getAsJsonArray("routes").isEmpty());
 		assertTrue(closed.getAsJsonArray("stations").isEmpty());
-		final JsonObject merged = BlueMapSnapshot.infrastructure(data, 102, selection(data, service("rapid", "쾌속", true, local, express)));
+		shared.setName("Renamed public station");
+		final var mergedSelection = selection(data, service("rapid", "쾌속", true, local, express));
+		final JsonObject merged = BlueMapSnapshot.infrastructure(data, 102, mergedSelection, geometryCache);
+		assertEquals(BlueMapSnapshot.infrastructure(data, 102, mergedSelection).toString(), merged.toString());
+		assertTrue(merged.toString().contains("Renamed public station"));
+		assertTrue(output.toString().contains("Shared")); // A later capture must not mutate an already published snapshot.
 		final JsonObject mergedGroup = merged.getAsJsonArray("routes").get(0).getAsJsonObject();
 		assertEquals(3, merged.getAsJsonArray("rails").size());
 		assertEquals(3, mergedGroup.getAsJsonArray("paths").size());
@@ -268,6 +275,12 @@ public final class BlueMapSnapshotTest {
 			assertEquals(1, services.size());
 			assertEquals("service:line:rapid", services.get(0).getAsJsonObject().get("id").getAsString());
 		}
+		final Rail changedRail = Rail.copy(path.get(1).getRail(), Rail.Shape.CABLE, 0);
+		assertEquals(path.get(1).getRail().getHexId(), changedRail.getHexId());
+		depot.getPath().set(1, new PathData(changedRail, 0, 0, 1, b, c));
+		final JsonObject edited = BlueMapSnapshot.infrastructure(data, 102, mergedSelection, geometryCache);
+		assertEquals(BlueMapSnapshot.infrastructure(data, 102, mergedSelection).toString(), edited.toString());
+		assertNotEquals(merged.toString(), edited.toString());
 	}
 
 	@Test

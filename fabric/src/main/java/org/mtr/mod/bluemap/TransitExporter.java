@@ -96,7 +96,7 @@ final class TransitExporter implements AutoCloseable {
 							if (closed || publication != policy) return;
 							final long captureTime = System.currentTimeMillis();
 							final JsonObject vehicleData = snapshot.vehicles(world.simulator, captureTime, selection);
-							final JsonObject infrastructure = updateInfrastructure ? BlueMapSnapshot.infrastructure(world.simulator, captureTime, selection) : null;
+							final JsonObject infrastructure = updateInfrastructure ? BlueMapSnapshot.infrastructure(world.simulator, captureTime, selection, world.geometryCache) : null;
 							if (world.arrivals == null || world.arrivalsRevision != policy.revision || captureTime >= world.nextArrivals) {
 								try {
 									world.arrivals = BlueMapSnapshot.arrivals(world.simulator, captureTime, selection);
@@ -303,6 +303,7 @@ final class TransitExporter implements AutoCloseable {
 		private final AtomicBoolean failed = new AtomicBoolean();
 		private final AtomicBoolean arrivalsFailed = new AtomicBoolean();
 		private final BlueMapSnapshotMailbox<SnapshotPair> mailbox = new BlueMapSnapshotMailbox<>();
+		private final RailGeometryCache geometryCache = new RailGeometryCache(); // Simulator thread only
 		private JsonObject vehicles; // IO worker only; completed snapshots are never mutated
 		private JsonObject infrastructure;
 		private long nextInfrastructure; // IO worker only

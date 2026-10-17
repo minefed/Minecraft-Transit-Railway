@@ -20,6 +20,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.IdentityHashMap;
 import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
@@ -135,6 +136,20 @@ final class BlueMapSnapshot {
 	}
 
 	static JsonObject infrastructure(Data simulator, long timestamp, BlueMapRoutePolicy.WorldSelection selection) {
+		return infrastructure(simulator, timestamp, selection, new RailGeometryCache());
+	}
+
+	static JsonObject infrastructure(Data simulator, long timestamp, BlueMapRoutePolicy.WorldSelection selection, RailGeometryCache geometryCache) {
+		geometryCache.beginCapture();
+		try {
+			return captureInfrastructure(simulator, timestamp, selection, geometryCache);
+		} finally {
+			geometryCache.endCapture();
+		}
+	}
+
+	private static JsonObject captureInfrastructure(Data simulator, long timestamp, BlueMapRoutePolicy.WorldSelection selection, RailGeometryCache geometryCache) {
+		final Map<Depot, DepotPathIndex> depotPaths = new IdentityHashMap<>();
 		final Map<String, RouteGeometry> displayedRoutes = new LinkedHashMap<>();
 		final Map<String, Rail> selectedRails = new LinkedHashMap<>();
 		final Map<Long, Set<String>> stationRoutes = new LinkedHashMap<>();
@@ -168,7 +183,7 @@ final class BlueMapSnapshot {
 				boolean found = false;
 				if (from != null && to != null) {
 					for (Depot depot : route.depots) {
-						final List<PathData> leg = routeLegSegments(depot.getPath(), from.getId(), to.getId());
+						final List<PathData> leg = depotPaths.computeIfAbsent(depot, value -> new DepotPathIndex(value.getPath())).leg(from.getId(), to.getId());
 						if (!leg.isEmpty()) {
 							found = true;
 							for (int segmentIndex = 0; segmentIndex < leg.size(); segmentIndex++) {
@@ -192,9 +207,9 @@ final class BlueMapSnapshot {
 				}
 			}
 		}
-		final JsonObject result = rails(selectedRails.values(), timestamp);
+		final JsonObject result = rails(selectedRails.values(), timestamp, geometryCache);
 		final JsonArray routes = new JsonArray();
-		displayedRoutes.values().forEach(geometry -> routes.add(geometry.json()));
+		displayedRoutes.values().forEach(geometry -> routes.add(geometry.json(geometryCache)));
 		final JsonArray stations = new JsonArray();
 		final Map<String, JsonObject> publicStations = new LinkedHashMap<>();
 		for (Station station : simulator.stations) {
@@ -379,28 +394,6 @@ final class BlueMapSnapshot {
 		return result;
 	}
 
-	private static List<PathData> routeLegSegments(List<PathData> path, long from, long to) {
-		for (int start = 0; start < path.size(); start++) {
-			if (path.get(start).getSavedRailBaseId() != from) {
-				continue;
-			}
-			for (int end = start + 1; end < path.size(); end++) {
-				if (path.get(end).getSavedRailBaseId() == to) {
-					final List<PathData> result = new ArrayList<>(path.subList(start, end + 1));
-					for (PathData segment : result) {
-						if (segment.getRail() == null || !segment.getRail().isValid() || !Double.isFinite(segment.getRailLength()) || segment.getRailLength() <= 0) {
-							return java.util.Collections.emptyList();
-						}
-					}
-					return result;
-				} else if (path.get(end).getSavedRailBaseId() != 0) {
-					break;
-				}
-			}
-		}
-		return java.util.Collections.emptyList();
-	}
-
 	private static final class RouteGeometry {
 		private final BlueMapRoutePolicy.DisplayRoute display;
 		private final Map<String, RailSpan> spans = new LinkedHashMap<>();
@@ -419,7 +412,7 @@ final class BlueMapSnapshot {
 			span.end = Math.max(span.end, end);
 		}
 
-		private JsonObject json() {
+		private JsonObject json(RailGeometryCache geometryCache) {
 			final JsonObject result = new JsonObject();
 			result.addProperty("id", display.id);
 			result.addProperty("name", display.name);
@@ -429,13 +422,7 @@ final class BlueMapSnapshot {
 			result.addProperty("missingLegs", missingLegs);
 			final JsonArray paths = new JsonArray();
 			for (RailSpan span : spans.values()) {
-				final double length = span.rail.railMath.getLength();
-				final int steps = Math.max(1, (int) Math.ceil(length * (span.end - span.start)));
-				final JsonArray points = new JsonArray();
-				for (int step = 0; step <= steps; step++) {
-					points.add(point(span.rail.railMath.getPosition(length * (span.start + (span.end - span.start) * step / steps), false)));
-				}
-				paths.add(points);
+				paths.add(geometryCache.span(span.rail.railMath, span.start, span.end));
 			}
 			final JsonArray stationIds = new JsonArray();
 			stations.forEach(stationIds::add);
@@ -537,24 +524,17 @@ final class BlueMapSnapshot {
 	}
 
 	static JsonObject rails(Iterable<Rail> rails, long timestamp) {
+		return rails(rails, timestamp, new RailGeometryCache());
+	}
+
+	private static JsonObject rails(Iterable<Rail> rails, long timestamp, RailGeometryCache geometryCache) {
 		final JsonArray result = new JsonArray();
 		for (Rail rail : rails) {
 			// An empty style list is MTR's intentionally invisible track.
 			if (rail.getTransportMode() != TransportMode.TRAIN || rail.getStyles().isEmpty() || !rail.isValid()) {
 				continue;
 			}
-			final JsonArray points = new JsonArray();
-			final double length = rail.railMath.getLength();
-			if (!Double.isFinite(length) || length <= 0) {
-				continue;
-			}
-			final int segments = (int) Math.ceil(length);
-			for (int i = 0; i <= segments; i++) {
-				final Vector position = rail.railMath.getPosition(length * i / segments, false);
-				if (finite(position)) {
-					points.add(point(position));
-				}
-			}
+			final JsonArray points = geometryCache.rail(rail.railMath);
 			if (points.size() >= 2) {
 				final JsonObject entry = new JsonObject();
 				entry.addProperty("id", rail.getHexId());
